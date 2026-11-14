@@ -32,6 +32,7 @@ git add .github && git commit -m "ci: GitHub Pages 배포·검사 워크플로 �
 
 1. 워크플로 파일 추가 (위 A 또는 B)
 2. 저장소 **Settings → Pages → Build and deployment → Source** 를 **GitHub Actions** 로 변경
+   (워크플로를 먼저 추가했다면 `configure-pages` 의 `enablement: true` 가 자동으로 켜 주므로 이 단계는 건너뛰어도 됩니다)
 3. Actions 탭에서 `Deploy to GitHub Pages` 실행(또는 main에 커밋)
 4. 배포 주소: https://topaz1324tmac2002-creator.github.io/topaz/
 
