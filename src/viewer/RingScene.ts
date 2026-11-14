@@ -1,5 +1,5 @@
 /**
- * 뷰포트 — three.js 씬(카메라·조명·환경맵·오빗 컨트롤·조형 브러시·턴테이블).
+ * 뷰포트 — three.js 씬(카메라·조명·환경맵·오빗 컨트롤·조형 브러시·실시간 금속 렌더링).
  * React에는 이 클래스의 인스턴스만 넘기고, 상태 변경은 메서드로 반영합니다.
  */
 import * as THREE from 'three'
@@ -63,16 +63,12 @@ export class RingScene {
   private highQuality = true
   private perfSamples: number[] = []
   private perfChecked = false
-  private turntable = false
-  private ttAngle = 0
   /** 화면에 다시 그려야 하는 상태인지 (렌더 온디맨드) */
   private needsRender = true
   private dragging = false
   private lastMetrics: MeasureResult | null = null
   private disposed = false
   private rafId = 0
-  private clock = new THREE.Clock()
-  private recording = false
 
   constructor(container: HTMLElement, design: Design, callbacks: SceneCallbacks = {}) {
     this.container = container
@@ -82,7 +78,6 @@ export class RingScene {
     this.renderer = new THREE.WebGLRenderer({
       antialias: true,
       alpha: true,
-      preserveDrawingBuffer: true,
       powerPreference: 'high-performance',
     })
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
@@ -258,14 +253,6 @@ export class RingScene {
     return !!this.sculpt && this.sculpt.strokes > 0
   }
 
-  setTurntable(on: boolean): void {
-    this.turntable = on
-    this.controls.enabled = !on && this.sculptMode === 'off'
-    this.ringGroup.rotation.set(0, 0, 0)
-    this.ttAngle = 0
-    this.fitCamera()
-  }
-
   exportSTL(includeGems: boolean): { blob: Blob; name: string; triangles: number } {
     const bandGeo = this.bandMesh?.geometry
     if (!bandGeo) throw new Error('메쉬가 아직 준비되지 않았습니다.')
@@ -281,83 +268,6 @@ export class RingScene {
     })
     const blob = buildBinarySTL(parts, { header: `jewelry-studio ${name}` })
     return { blob, name, triangles: countTriangles(parts) }
-  }
-
-  /** 현재 뷰를 PNG로 캡처(턴테이블 모드면 9:16 프레임만 잘라 1080×1920) */
-  capturePNG(): string {
-    this.renderOnce()
-    const src = this.renderer.domElement
-    if (!this.turntable) return src.toDataURL('image/png')
-    const rect = this.turntableRect() // CSS px
-    const dpr = this.renderer.getPixelRatio()
-    const out = document.createElement('canvas')
-    out.width = 1080
-    out.height = 1920
-    const ctx = out.getContext('2d')
-    if (!ctx) return src.toDataURL('image/png')
-    ctx.drawImage(
-      src,
-      rect.x * dpr,
-      rect.y * dpr,
-      rect.w * dpr,
-      rect.h * dpr,
-      0,
-      0,
-      1080,
-      1920,
-    )
-    return out.toDataURL('image/png')
-  }
-
-  /** 9:16 프레임을 초 단위로 녹화해 Blob 반환 (MediaRecorder, WebM/MP4) */
-  async recordTurntable(seconds = 6): Promise<{ blob: Blob; ext: string }> {
-    if (this.recording) throw new Error('이미 녹화 중입니다.')
-    if (!this.turntable) throw new Error('턴테이블 모드에서만 녹화할 수 있습니다.')
-    if (typeof MediaRecorder === 'undefined') throw new Error('이 브라우저는 영상 녹화(MediaRecorder)를 지원하지 않습니다.')
-
-    const mime = ['video/mp4;codecs=avc1', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find(
-      (m) => MediaRecorder.isTypeSupported(m),
-    )
-    if (!mime) throw new Error('지원되는 영상 코덱이 없습니다.')
-
-    const rect = this.turntableRect()
-    const dpr = this.renderer.getPixelRatio()
-    const canvas = document.createElement('canvas')
-    canvas.width = 720
-    canvas.height = 1280
-    const ctx = canvas.getContext('2d')
-    if (!ctx) throw new Error('캔버스를 만들 수 없습니다.')
-    const src = this.renderer.domElement
-
-    const stream = canvas.captureStream(30)
-    const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 6_000_000 })
-    const chunks: BlobPart[] = []
-    recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) chunks.push(e.data)
-    }
-    const done = new Promise<Blob>((resolve, reject) => {
-      recorder.onstop = () => resolve(new Blob(chunks, { type: mime }))
-      recorder.onerror = () => reject(new Error('녹화 중 오류가 발생했습니다.'))
-    })
-
-    this.recording = true
-    this.ttAngle = 0
-    recorder.start()
-    const start = performance.now()
-    const tick = (): void => {
-      ctx.drawImage(src, rect.x * dpr, rect.y * dpr, rect.w * dpr, rect.h * dpr, 0, 0, canvas.width, canvas.height)
-      if (performance.now() - start < seconds * 1000) {
-        requestAnimationFrame(tick)
-      } else {
-        recorder.stop()
-        this.recording = false
-      }
-    }
-    requestAnimationFrame(tick)
-
-    const blob = await done
-    this.recording = false
-    return { blob, ext: mime.includes('mp4') ? 'mp4' : 'webm' }
   }
 
   getMetrics(): MeasureResult | null {
@@ -503,7 +413,7 @@ export class RingScene {
     if (!this.band) return
     const radius = Math.max(6, this.band.outerRadiusMm * 1.12)
     const fov = THREE.MathUtils.degToRad(this.camera.fov)
-    const aspect = this.turntable ? 9 / 16 : this.currentAspect()
+    const aspect = this.currentAspect()
     const hFov = 2 * Math.atan(Math.tan(fov / 2) * aspect)
     const dist = (radius / Math.sin(Math.min(fov, hFov) / 2)) * 1.08
     this.camera.position.set(0, dist * 0.16, dist)
@@ -529,25 +439,7 @@ export class RingScene {
     const h = this.container.clientHeight || 1
     this.renderer.setSize(w, h, false)
     this.needsRender = true
-    if (!this.turntable) {
-      this.frameCamera(w / Math.max(1, h))
-    }
-  }
-
-  /** 캔버스 안의 9:16 프레임 위치(위에서부터의 CSS px) */
-  private turntableRect(): { x: number; y: number; w: number; h: number; topY: number } {
-    const size = this.renderer.getSize(new THREE.Vector2())
-    const cw = size.x
-    const ch = size.y
-    let h = Math.min(ch * 0.94, cw * 0.94 * (16 / 9))
-    let w = h * (9 / 16)
-    if (w > cw * 0.94) {
-      w = cw * 0.94
-      h = w * (16 / 9)
-    }
-    const x = (cw - w) / 2
-    const topY = (ch - h) / 2
-    return { x, y: ch - topY - h, w, h, topY }
+    this.frameCamera(w / Math.max(1, h))
   }
 
   private emitMetrics(): void {
@@ -628,18 +520,9 @@ export class RingScene {
   }
 
   private renderOnce(): void {
-    const size = this.renderer.getSize(new THREE.Vector2())
     this.renderer.setScissorTest(false)
+    const size = this.renderer.getSize(new THREE.Vector2())
     this.renderer.setViewport(0, 0, size.x, size.y)
-    if (this.turntable) {
-      // 9:16 프레임 밖은 투명하게 지우고, 프레임 안쪽만 렌더링(스시저)
-      this.renderer.clear()
-      const r = this.turntableRect()
-      this.renderer.setScissorTest(true)
-      this.renderer.setViewport(r.x, r.y, r.w, r.h)
-      this.renderer.setScissor(r.x, r.y, r.w, r.h)
-      this.frameCamera(r.w / r.h)
-    }
     this.renderer.render(this.scene, this.camera)
   }
 
@@ -648,19 +531,8 @@ export class RingScene {
       return
     }
     this.rafId = requestAnimationFrame(this.animate)
-    const dt = Math.min(0.05, this.clock.getDelta())
 
-    if (this.turntable) {
-      // 1회전 12초
-      this.ttAngle += (dt * (Math.PI * 2)) / 12
-      this.ringGroup.rotation.y = this.ttAngle
-      const t0 = performance.now()
-      this.renderOnce()
-      this.sampleFrame(performance.now() - t0)
-      return
-    }
-
-    // 렌더 온디맨드: 카메라(오빗·관성)나 씬이 바뀔 때만 그립니다.
+    // 렌더 온디맨드: 카메라(오빗·관성)·씬·조형이 바뀔 때만 그립니다.
     const moved = this.controls.update()
     if (moved || this.needsRender) {
       this.needsRender = false

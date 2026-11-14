@@ -3,14 +3,10 @@ import type { MutableRefObject } from 'react'
 import { RingScene, type SceneMetrics } from './RingScene'
 import { useStore } from '../store'
 import type { Design, SculptMode } from '../core/types'
-import { downloadBlob, downloadDataUrl, formatDateStamp } from '../utils/download'
+import { downloadBlob } from '../utils/download'
 
 export interface ViewerApi {
   exportSTL: (includeGems: boolean) => void
-  capturePNG: () => void
-  record: (seconds: number) => Promise<void>
-  resetSculpt: () => void
-  undoSculpt: () => void
 }
 
 interface Props {
@@ -18,7 +14,6 @@ interface Props {
   sculptMode: SculptMode
   brushRadius: number
   brushStrength: number
-  turntable: boolean
   highQuality: boolean
   onMetrics: (m: SceneMetrics) => void
   onNotice: (text: string, kind?: 'info' | 'warn' | 'error' | 'ok') => void
@@ -31,7 +26,6 @@ export function RingViewer({
   sculptMode,
   brushRadius,
   brushStrength,
-  turntable,
   highQuality,
   onMetrics,
   onNotice,
@@ -70,40 +64,6 @@ export function RingViewer({
             noticeCb.current(err instanceof Error ? err.message : 'STL 내보내기에 실패했습니다.', 'error')
           }
         },
-        capturePNG: () => {
-          try {
-            const url = scene!.capturePNG()
-            downloadDataUrl(url, `ringstudio_${formatDateStamp()}.png`)
-            noticeCb.current('이미지를 저장했습니다.', 'ok')
-          } catch (err) {
-            noticeCb.current(err instanceof Error ? err.message : '이미지 저장에 실패했습니다.', 'error')
-          }
-        },
-        record: async (seconds: number) => {
-          try {
-            noticeCb.current('턴테이블을 녹화하는 중입니다…', 'info')
-            const { blob, ext } = await scene!.recordTurntable(seconds)
-            downloadBlob(blob, `ringstudio_turntable_${formatDateStamp()}.${ext}`)
-            noticeCb.current(`영상 저장 완료 (${seconds}초 · ${ext.toUpperCase()})`, 'ok')
-          } catch (err) {
-            noticeCb.current(err instanceof Error ? err.message : '녹화에 실패했습니다.', 'error')
-          }
-        },
-        resetSculpt: () => {
-          try {
-            scene!.resetSculpted()
-            noticeCb.current('조형을 초기화했습니다.', 'info')
-          } catch {
-            /* noop */
-          }
-        },
-        undoSculpt: () => {
-          try {
-            if (!scene!.undoSculpt()) noticeCb.current('되돌릴 조형이 없습니다.', 'warn')
-          } catch {
-            /* noop */
-          }
-        },
       }
     } catch (err) {
       noticeCb.current(
@@ -132,10 +92,6 @@ export function RingViewer({
   useEffect(() => {
     sceneRef.current?.setBrush(brushRadius, brushStrength)
   }, [brushRadius, brushStrength])
-
-  useEffect(() => {
-    sceneRef.current?.setTurntable(turntable)
-  }, [turntable])
 
   useEffect(() => {
     sceneRef.current?.setHighQuality(highQuality)

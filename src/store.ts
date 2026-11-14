@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { DEFAULT_DESIGN, type BandParams, type Design, type EngravingParams, type EnvironmentId, type MetalId, type SculptMode, type StoneParams } from './core/types'
 
-export type TabId = 'band' | 'stone' | 'engrave' | 'material' | 'export'
+export type TabId = 'band' | 'stone' | 'sculpt' | 'engrave' | 'material' | 'export'
 export type ToastKind = 'info' | 'warn' | 'error' | 'ok'
 export interface Toast {
   id: number
@@ -52,7 +52,6 @@ interface State {
   sculptMode: SculptMode
   brushRadiusMm: number
   brushStrength: number
-  turntable: boolean
   highQuality: boolean
   toast: Toast | null
   undoStack: Design[]
@@ -68,7 +67,6 @@ interface State {
   setSculptMode: (mode: SculptMode) => void
   setHighQuality: (on: boolean) => void
   setBrush: (patch: { radiusMm?: number; strength?: number }) => void
-  setTurntable: (on: boolean) => void
   undo: () => void
   redo: () => void
   resetDesign: () => void
@@ -105,14 +103,14 @@ export const useStore = create<State>()((set, get) => {
     sculptMode: 'off',
     brushRadiusMm: 2.2,
     brushStrength: 0.5,
-    turntable: false,
     highQuality: true,
     toast: null,
     undoStack: [],
     redoStack: [],
     sculptAction: null,
 
-    setTab: (tab) => set({ tab }),
+    /** 조형 탭을 벗어나면 브러시 입력도 함께 끕니다(다른 탭에서 실수로 표면이 깎이지 않도록). */
+    setTab: (tab) => set((s) => (tab === 'sculpt' || s.sculptMode === 'off' ? { tab } : { tab, sculptMode: 'off' })),
 
     patchBand: (patch, key = 'band:' + Object.keys(patch).join(',')) => {
       const s = get()
@@ -136,7 +134,6 @@ export const useStore = create<State>()((set, get) => {
         brushRadiusMm: patch.radiusMm ?? s.brushRadiusMm,
         brushStrength: patch.strength ?? s.brushStrength,
       })),
-    setTurntable: (on) => set({ turntable: on }),
 
     undo: () => {
       const s = get()

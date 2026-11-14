@@ -8,12 +8,11 @@ import { Section, Stat } from './controls'
 interface Props {
   metrics: SceneMetrics | null
   onExportSTL: (includeGems: boolean) => void
-  onCapturePNG: () => void
 }
 
 const SHOWCASE: MetalId[] = ['gold18k', 'silver925', 'rose18k']
 
-export function ExportPanel({ metrics, onExportSTL, onCapturePNG }: Props): JSX.Element {
+export function ExportPanel({ metrics, onExportSTL }: Props): JSX.Element {
   const design = useStore((s) => s.design)
   const volume = metrics?.measure.metalVolumeCm3 ?? 0
   const metal = METALS[design.metal]
@@ -87,19 +86,16 @@ export function ExportPanel({ metrics, onExportSTL, onCapturePNG }: Props): JSX.
         ))}
       </Section>
 
-      <Section title="내보내기">
+      <Section title="STL 내보내기">
         <button type="button" className="btn primary block" onClick={() => onExportSTL(false)}>
           STL 다운로드 (바이너리 · mm)
         </button>
         <p className="field-hint">
           밴드 + 세팅 금속부를 하나의 STL로 저장합니다. 보석은 주물 형상에 포함되지 않습니다.
         </p>
-        <div className="btn-row">
-          <button type="button" className="btn ghost" onClick={() => onExportSTL(true)}>
+        <div style={{ marginTop: 10 }}>
+          <button type="button" className="btn ghost block" onClick={() => onExportSTL(true)}>
             보석 포함 STL
-          </button>
-          <button type="button" className="btn ghost" onClick={onCapturePNG}>
-            뷰 PNG 저장
           </button>
         </div>
         <p className="field-hint">
