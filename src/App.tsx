@@ -142,8 +142,7 @@ export default function App(): JSX.Element {
           {sculptMode !== 'off' ? (
             <div className="sculpt-pill">
               <span className="sculpt-pill-label">
-                조형 중 · {BRUSH_LABEL[sculptMode]} {brushRadiusMm.toFixed(1)}mm · {Math.round(brushStrength * 100)}% — 표면을
-                문질러 밀고 당기세요
+                조형 중 · {BRUSH_LABEL[sculptMode]} {brushRadiusMm.toFixed(1)}mm · {Math.round(brushStrength * 100)}%
               </span>
               <button type="button" className="btn ghost" onClick={() => setSculptMode('off')}>
                 조형 종료
