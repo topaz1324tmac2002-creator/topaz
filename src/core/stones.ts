@@ -29,18 +29,20 @@ const OVAL_RATIO = 1.4
 
 function latheGem(sizeMm: number, oval: boolean): THREE.BufferGeometry {
   const g = sizeMm / 2
-  const crownH = sizeMm * 0.17
-  const pavH = sizeMm * 0.42
-  const tableR = g * 0.56
+  const crownH = sizeMm * 0.22
+  const pavH = sizeMm * 0.45
+  const tableR = g * 0.55
+  const girdle = sizeMm * 0.055
   const pts: THREE.Vector2[] = [
     new THREE.Vector2(0.0001, crownH),
     new THREE.Vector2(tableR, crownH),
-    new THREE.Vector2(g * 0.93, crownH * 0.5),
-    new THREE.Vector2(g, crownH * 0.12),
-    new THREE.Vector2(g, -crownH * 0.12),
+    new THREE.Vector2(g * 0.9, crownH * 0.5),
+    new THREE.Vector2(g, girdle),
+    new THREE.Vector2(g, -girdle),
+    new THREE.Vector2(g * 0.62, -pavH * 0.5),
     new THREE.Vector2(0.0001, -pavH),
   ]
-  const geo = new THREE.LatheGeometry(pts, 8)
+  const geo = new THREE.LatheGeometry(pts, 12)
   if (oval) geo.scale(OVAL_RATIO, 1, 1)
   geo.computeVertexNormals()
   geo.computeBoundingSphere()
@@ -52,9 +54,9 @@ function buildProngs(params: StoneParams): THREE.BufferGeometry[] {
   const n = params.setting === 'prong6' ? 6 : 4
   const g = params.sizeMm / 2
   const r = params.prongMm / 2
-  const crownH = params.sizeMm * 0.17
-  const bottom = -params.sizeMm * 0.16
-  const top = crownH * 1.02
+  const crownH = params.sizeMm * 0.22
+  const bottom = -params.sizeMm * 0.18
+  const top = crownH * 0.72
   const height = top - bottom
   const out: THREE.BufferGeometry[] = []
 
@@ -66,8 +68,8 @@ function buildProngs(params: StoneParams): THREE.BufferGeometry[] {
   const ovalScale = params.shape === 'oval' ? OVAL_RATIO : 1
   for (let k = 0; k < n; k++) {
     const phi = params.setting === 'prong6' ? (k / n) * Math.PI * 2 : ((k + 0.5) / n) * Math.PI * 2
-    const px = Math.cos(phi) * g * 0.97 * ovalScale
-    const pz = Math.sin(phi) * g * 0.97
+    const px = Math.cos(phi) * g * 0.94 * ovalScale
+    const pz = Math.sin(phi) * g * 0.94
     const c = cyl.clone()
     c.translate(px, 0, pz)
     const b = ball.clone()
@@ -160,9 +162,12 @@ export function buildStones(params: StoneParams, ring: { outerRadiusMm: number }
   }
 }
 
-/** 보석 1개의 근사 캐럿 (다이아몬드 기준 경험식, 표시용) */
+/** 보석 1개의 근사 캐럿 (다이아몬드 기준 경험식, 표시용)
+ *  round: ct ≈ 0.0037 × d³  (6.5mm ≈ 1ct)
+ *  oval: 같은 단축 지름의 라운드 대략 1.25배 (긴 축 1.4배 × 패싯 손실 보정)
+ */
 export function estimateCarat(sizeMm: number, shape: 'round' | 'oval'): number {
-  const r = sizeMm / 2
-  if (shape === 'round') return r * r * sizeMm * 0.0061
-  return r * r * sizeMm * OVAL_RATIO * 0.0058
+  const d = Math.max(0.5, sizeMm)
+  const round = 0.0037 * d * d * d
+  return shape === 'round' ? round : round * 1.25
 }

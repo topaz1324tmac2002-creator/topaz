@@ -141,20 +141,21 @@ export class RingScene {
       clearcoatRoughness: 0.18,
     })
     this.gemMaterial = new THREE.MeshPhysicalMaterial({
-      color: 0xf7fbff,
+      color: 0xf4f9ff,
       metalness: 0,
-      roughness: 0.04,
+      roughness: 0.03,
       transmission: 0,
       thickness: 2,
       ior: 2.417,
+      reflectivity: 1,
       specularIntensity: 1,
-      envMapIntensity: 2.4,
+      envMapIntensity: 2.6,
       clearcoat: 1,
       clearcoatRoughness: 0.02,
       flatShading: true,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.82,
+      opacity: 0.78,
       depthWrite: false,
     })
 
@@ -203,7 +204,7 @@ export class RingScene {
     this.highQuality = on
     this.gemMaterial.transmission = on ? 0.9 : 0
     this.gemMaterial.transparent = !on
-    this.gemMaterial.opacity = on ? 1 : 0.82
+    this.gemMaterial.opacity = on ? 1 : 0.78
     this.gemMaterial.depthWrite = on
     this.gemMaterial.needsUpdate = true
     this.needsRender = true
