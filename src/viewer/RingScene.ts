@@ -24,6 +24,8 @@ export interface SceneMetrics {
 export interface SceneCallbacks {
   onMetrics?: (m: SceneMetrics) => void
   onError?: (message: string) => void
+  /** 첫 20프레임이 느리면 고비용 효과를 자동으로 끕니다(적응형 품질) */
+  onAutoQuality?: (avgFrameMs: number) => void
 }
 
 export class RingScene {
@@ -59,6 +61,8 @@ export class RingScene {
   private sculptUndo: Float32Array[] = []
 
   private highQuality = true
+  private perfSamples: number[] = []
+  private perfChecked = false
   private turntable = false
   private ttAngle = 0
   /** 화면에 다시 그려야 하는 상태인지 (렌더 온디맨드) */
@@ -649,7 +653,9 @@ export class RingScene {
       // 1회전 12초
       this.ttAngle += (dt * (Math.PI * 2)) / 12
       this.ringGroup.rotation.y = this.ttAngle
+      const t0 = performance.now()
       this.renderOnce()
+      this.sampleFrame(performance.now() - t0)
       return
     }
 
@@ -657,7 +663,23 @@ export class RingScene {
     const moved = this.controls.update()
     if (moved || this.needsRender) {
       this.needsRender = false
+      const t0 = performance.now()
       this.renderOnce()
+      this.sampleFrame(performance.now() - t0)
+    }
+  }
+
+  /** 첫 20프레임을 재서 평균이 120ms를 넘으면 보석 투과광을 자동으로 끕니다. */
+  private sampleFrame(ms: number): void {
+    if (this.perfChecked) return
+    this.perfSamples.push(ms)
+    if (this.perfSamples.length < 20) return
+    this.perfChecked = true
+    const avg = this.perfSamples.reduce((a, b) => a + b, 0) / this.perfSamples.length
+    if (avg > 120 && this.highQuality) {
+      this.setHighQuality(false)
+      this.needsRender = true
+      this.callbacks.onAutoQuality?.(Math.round(avg))
     }
   }
 

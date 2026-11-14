@@ -106,7 +106,7 @@ export const useStore = create<State>()((set, get) => {
     brushRadiusMm: 2.2,
     brushStrength: 0.5,
     turntable: false,
-    highQuality: false,
+    highQuality: true,
     toast: null,
     undoStack: [],
     redoStack: [],

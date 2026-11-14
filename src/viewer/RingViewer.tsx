@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import type { MutableRefObject } from 'react'
 import { RingScene, type SceneMetrics } from './RingScene'
+import { useStore } from '../store'
 import type { Design, SculptMode } from '../core/types'
 import { downloadBlob, downloadDataUrl, formatDateStamp } from '../utils/download'
 
@@ -53,6 +54,10 @@ export function RingViewer({
       scene = new RingScene(host, initialDesign.current, {
         onMetrics: (m) => metricsCb.current(m),
         onError: (msg) => noticeCb.current(msg, 'error'),
+        onAutoQuality: (ms) => {
+          useStore.getState().setHighQuality(false)
+          noticeCb.current(`프레임이 느립니다(${ms}ms). 보석 투과광을 자동으로 껐습니다 — 재질 탭에서 다시 켤 수 있습니다.`, 'warn')
+        },
       })
       sceneRef.current = scene
       apiRef.current = {

@@ -19,9 +19,9 @@ const TABS: { id: TabId; label: string }[] = [
 ]
 
 function useIsWide(): boolean {
-  const [wide, setWide] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth >= 1100))
+  const [wide, setWide] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth >= 1024))
   useEffect(() => {
-    const mq = window.matchMedia('(min-width: 1100px)')
+    const mq = window.matchMedia('(min-width: 1024px)')
     const onChange = (): void => setWide(mq.matches)
     mq.addEventListener('change', onChange)
     return () => mq.removeEventListener('change', onChange)
