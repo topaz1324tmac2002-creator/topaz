@@ -16,7 +16,8 @@ npm run build    # 타입 검사 + 프로덕션 빌드 (dist/)
 npm run verify   # 3D 없이 기하·중량·수밀성·STL 코어 검증
 ```
 
-배포: GitHub Pages 워크플로가 포함되어 있습니다(`.github/workflows/deploy.yml`).
+배포: GitHub Pages 워크플로는 [`docs/github-workflows/`](docs/github-workflows/README.md) 에 있습니다.
+(GitHub 앱 권한상 워크플로 파일은 저장소 소유자가 `.github/workflows/` 로 옮겨야 활성화됩니다 — 1분)
 → https://topaz1324tmac2002-creator.github.io/topaz/
 
 ## 지금 되는 것
