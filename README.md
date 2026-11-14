@@ -21,6 +21,22 @@ npm run verify   # 3D 없이 기하·중량·수밀성·STL 코어 검증
 (GitHub 앱 권한상 워크플로 파일은 저장소 소유자가 `.github/workflows/` 로 옮겨야 활성화됩니다 — 1분)
 → https://topaz1324tmac2002-creator.github.io/topaz/
 
+## 설치형 앱(PWA) — 아이패드·PC
+
+브라우저 탭이 아니라 **앱처럼 전체 화면으로 실행되고, 한 번 열면 오프라인에서도 뜨는** 설치형 앱으로 쓸 수 있습니다.
+
+| 항목 | 파일 |
+|---|---|
+| 웹 앱 매니페스트(이름·아이콘·표시 모드) | `public/manifest.webmanifest` |
+| 앱 아이콘 | `public/icons/icon-192.png`, `icon-512.png`, `apple-touch-icon.png` |
+| 오프라인 앱 셸(서비스 워커) | `public/sw.js` (등록은 `src/main.tsx`, 프로덕션 빌드에서만) |
+| iOS 설치 메타 태그 | `index.html` (`apple-touch-icon`, `apple-mobile-web-app-*`) |
+
+- **아이패드(Safari)**: 사이트를 연 뒤 공유 → **홈 화면에 추가**. 홈 화면 아이콘 이름은 `Topaz`.
+- **PC(Chrome·Edge)**: 주소창 오른쪽 **설치** 아이콘 → 설치. 앱 창으로 열립니다.
+- 오프라인 캐시는 `scope` 기준 상대 경로라 `…/topaz/` 같은 하위 경로 배포에서도 동작합니다. 탐색 요청은 네트워크 우선(끊기면 캐시된 `index.html`), 해시된 빌드 자산은 stale-while-revalidate.
+- 앱을 새로 빌드해 배포하면 다음 방문 때 자동으로 최신 파일을 받아옵니다(캐시 이름은 `topaz-shell-topaz-v1`).
+
 ## 화면 구성 (탭 6개)
 
 ```
