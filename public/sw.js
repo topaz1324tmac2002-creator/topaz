@@ -1,11 +1,11 @@
-/* 주얼리 스튜디오 · Topaz — 오프라인 앱 셸 서비스 워커
+/* 김영훈의 주얼리 스튜디오 — 오프라인 앱 셸 서비스 워커
  *
  * GitHub Pages 프로젝트 사이트(https://…github.io/topaz/)처럼 하위 경로에 올라가도
  * 깨지지 않도록, 모든 경로를 이 워커의 scope 기준 상대 경로로 계산한다.
  *  - 탐색(navigation) 요청: 네트워크 우선 → 실패하면 캐시된 index.html
  *  - 그 밖의 같은 scope 정적 자산: stale-while-revalidate (캐시 즉시 응답 + 백그라운드 갱신)
  */
-const VERSION = 'topaz-v1'
+const VERSION = 'topaz-v2'
 const CACHE = `topaz-shell-${VERSION}`
 const CACHE_PREFIX = 'topaz-shell-'
 

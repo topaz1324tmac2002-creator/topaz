@@ -103,7 +103,7 @@ export default function App(): JSX.Element {
             ◎
           </span>
           <div className="brand-text">
-            <strong>주얼리 스튜디오</strong>
+            <strong>김영훈의 주얼리 스튜디오</strong>
             <small>RingStudio · 디자인 → 검증 → STL</small>
           </div>
         </div>

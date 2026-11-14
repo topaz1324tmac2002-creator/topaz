@@ -1,6 +1,6 @@
 {
-  "name": "Topaz 주얼리 스튜디오",
-  "short_name": "Topaz",
+  "name": "김영훈의 주얼리 스튜디오",
+  "short_name": "김영훈의 주얼리 스튜디오",
   "description": "브라우저에서 반지를 디자인하고, 중량을 확인하고, 3D 프린팅용 STL로 내보내는 주얼리 스튜디오.",
   "lang": "ko",
   "dir": "ltr",
