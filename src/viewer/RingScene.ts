@@ -26,8 +26,12 @@ export interface SceneCallbacks {
   onAutoQuality?: (avgFrameMs: number) => void
 }
 
-/** 카메라 프리셋 — 'right' 는 밴드 폭·단면이 정면으로 보이는 우측 뷰 */
-export type ViewPreset = 'front' | 'right'
+/** 카메라 프리셋
+ *  · front  : 반지 면을 정면에서
+ *  · right  : 밴드 폭·단면이 정면으로 보이는 우측 뷰
+ *  · engrave: 각인 면(안쪽이면 위에서, 바깥이면 아래에서)이 정면으로 보이는 뷰
+ */
+export type ViewPreset = 'front' | 'right' | 'engrave'
 
 type ViewAnim = { from: THREE.Vector3; to: THREE.Vector3; start: number; dur: number } | null
 
@@ -188,9 +192,18 @@ export class RingScene {
     const envChanged = design.environment !== prev.environment
     this.design = design
 
+    // 각인을 켜거나 안/바깥을 바꾸면 각인 면이 보이는 뷰로 부드럽게 이동합니다.
+    const engravingTurnedOn = design.engraving.enabled && !prev.engraving.enabled
+    const engravingMoved =
+      design.engraving.enabled && design.engraving.position !== prev.engraving.position
+
     if (geometryChanged) {
-      // 밴드 폭을 조절하면 폭·단면이 바로 보이는 우측 뷰로 부드럽게 이동합니다.
-      this.rebuild({ refit: sizeChanged, then: widthChanged ? 'right' : null })
+      const then: ViewPreset | null = widthChanged
+        ? 'right' // 밴드 폭을 조절하면 폭·단면이 바로 보이는 우측 뷰로
+        : engravingTurnedOn || engravingMoved
+          ? 'engrave'
+          : null
+      this.rebuild({ refit: sizeChanged, then })
     }
     if (metalChanged) this.applyMetal(design.metal)
     if (gemChanged) this.applyGem(design.stone.gem)
@@ -200,10 +213,14 @@ export class RingScene {
   /** 카메라를 지정한 프리셋으로 옮깁니다. */
   applyView(preset: ViewPreset, animate = true): void {
     const dist = this.fitDistance()
+    const side = this.design.engraving.position === 'outer' ? -1 : 1
     const to =
       preset === 'right'
         ? new THREE.Vector3(dist, dist * 0.24, 0)
-        : new THREE.Vector3(0, dist * 0.16, dist)
+        : preset === 'engrave'
+          ? // 각인은 6시(스톤 반대편)에 있으므로 위(안쪽)/아래(바깥)에서 내려다봅니다.
+            new THREE.Vector3(dist * 0.1, dist * 0.92 * side, dist * 0.34).multiplyScalar(0.66)
+          : new THREE.Vector3(0, dist * 0.16, dist)
     this.controls.target.set(0, 0, 0)
     if (!animate) {
       this.camera.position.copy(to)

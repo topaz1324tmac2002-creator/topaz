@@ -144,6 +144,16 @@ export default function App(): JSX.Element {
             >
               우측
             </button>
+            {design.engraving.enabled ? (
+              <button
+                type="button"
+                className="btn ghost"
+                onClick={() => apiRef.current?.setView('engrave')}
+                title="각인을 읽을 수 있는 방향에서 보기"
+              >
+                각인
+              </button>
+            ) : null}
           </div>
 
           <div className="viewport-foot">
