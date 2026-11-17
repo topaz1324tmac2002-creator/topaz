@@ -251,9 +251,9 @@ export function buildEngraving(params: EngravingParams, ctx: EngravingContext): 
         a += mod.da
       }
       positions.push(r * Math.sin(theta), r * Math.cos(theta), a)
-      // 패치의 앞면(법선)은 두 면 모두 반지 중심 쪽을 향합니다. 그래서 바깥 각인은
-      // 뒷면으로 보이므로 u 를 뒤집고, 안쪽 각인은 앞면 그대로 두어야 글자가 바로 읽힙니다.
-      uvs.push(side === 'outer' ? 1 - t : t, v)
+      // 안쪽/바깥 패치의 앞면이 향하는 방향이 서로 반대라, 같은 UV 를 쓰면 한쪽이 반전되어 보입니다.
+      // u 는 구름 방향 기준으로 뒤집고(좌우), 안쪽 패치는 v 도 뒤집어(상하) 카메라에서 글자가 바로 읽히게 합니다.
+      uvs.push(1 - t, side === 'inner' ? 1 - v : v)
     }
   }
   for (let i = 0; i < segT; i++) {
