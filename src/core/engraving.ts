@@ -251,8 +251,9 @@ export function buildEngraving(params: EngravingParams, ctx: EngravingContext): 
         a += mod.da
       }
       positions.push(r * Math.sin(theta), r * Math.cos(theta), a)
-      // u 를 뒤집어야 정면에서 봤을 때 글자가 좌우 반전되지 않습니다.
-      uvs.push(1 - t, v)
+      // 패치의 앞면(법선)은 두 면 모두 반지 중심 쪽을 향합니다. 그래서 바깥 각인은
+      // 뒷면으로 보이므로 u 를 뒤집고, 안쪽 각인은 앞면 그대로 두어야 글자가 바로 읽힙니다.
+      uvs.push(side === 'outer' ? 1 - t : t, v)
     }
   }
   for (let i = 0; i < segT; i++) {
