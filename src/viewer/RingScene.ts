@@ -376,7 +376,15 @@ export class RingScene {
       disposeSet.add(m.geometry)
       this.ringGroup.remove(m)
     }
-    for (const g of disposeSet) g.dispose()
+    // 같은 지오메트리를 여러 메쉬가 공유하므로(메레 스톤 등) 참조를 세어 0이 되면 dispose 합니다.
+    const refs = new Map<THREE.BufferGeometry, number>()
+    for (const part of [...this.gemParts, ...this.metalParts]) {
+      refs.set(part.geometry, (refs.get(part.geometry) ?? 0) + 1)
+    }
+    for (const g of disposeSet) {
+      const n = refs.get(g) ?? 0
+      if (n <= 1) g.dispose()
+    }
     if (this.engravingMesh) {
       const mat = this.engravingMesh.material as THREE.MeshStandardMaterial
       mat.alphaMap?.dispose()
