@@ -649,13 +649,15 @@ function buildHalo(params: StoneParams, outline: Outline): { gems: Placed[]; met
   // 레일 — 메레를 받치는 얇은 금속 띠. 바깥면은 메레 바깥면보다 살짝 안으로.
   // (바깥 윤곽은 마이터를 1.1 로 묶어, 뾰족한 팁에서 금속이 밖으로 튀어나오지 않게 합니다)
   const railInner = offsetOutline(outline, -size * 0.02)
-  const railOuter = offsetOutline(outline, inset + d * 0.32, 1.1)
+  // 레일 바깥 경계는 메레 고리(path)를 기준으로 오프셋 — 뾰족한 팁에서도 레일이
+  // 메레의 바깥면을 덮도록(스톤이 금속 밖으로 매달리지 않도록) 같은 방식으로 확장합니다.
+  const railOuter = offsetOutline(path, d * 0.44, 1.2)
   const railTop = meleeY - d * 0.04
   const railBottom = meleeY - d * 0.55
   const gallery = buildBand(
     railInner,
     railOuter,
-    offsetOutline(outline, inset + d * 0.26, 1.1),
+    offsetOutline(path, d * 0.38, 1.2),
     railInner,
     railBottom,
     railTop,
