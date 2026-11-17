@@ -627,8 +627,8 @@ function buildHalo(params: StoneParams, outline: Outline): { gems: Placed[]; met
   }
 
   const meleeGeo = buildMeleeGeometry(d)
-  const meleeY = -size * 0.008
-  const tilt = (8 * Math.PI) / 180
+  const meleeY = -size * 0.004
+  const tilt = (6 * Math.PI) / 180
   const gems: Placed[] = []
   for (let k = 0; k < count; k++) {
     const s = at[k]
@@ -652,7 +652,7 @@ function buildHalo(params: StoneParams, outline: Outline): { gems: Placed[]; met
   // 레일 바깥 경계는 메레 고리(path)를 기준으로 오프셋 — 뾰족한 팁에서도 레일이
   // 메레의 바깥면을 덮도록(스톤이 금속 밖으로 매달리지 않도록) 같은 방식으로 확장합니다.
   const railOuter = offsetOutline(path, d * 0.44, 1.2)
-  const railTop = meleeY - d * 0.04
+  const railTop = meleeY - d * 0.2
   const railBottom = meleeY - d * 0.55
   const gallery = buildBand(
     railInner,
