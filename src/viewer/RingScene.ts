@@ -293,11 +293,12 @@ export class RingScene {
   /** 반지가 화면에 꽉 차는 카메라 거리 */
   private fitDistance(): number {
     const outer = this.band?.outerRadiusMm ?? 11
-    const radius = Math.max(6, outer * 1.12)
+    // 스톤·세팅까지 포함해 여유 있게 담기도록 1.25배 여백을 둡니다(기본 뷰에서 반지가 잘리지 않게).
+    const radius = Math.max(6, outer * 1.25)
     const fov = THREE.MathUtils.degToRad(this.camera.fov)
     const aspect = this.currentAspect()
     const hFov = 2 * Math.atan(Math.tan(fov / 2) * aspect)
-    return (radius / Math.sin(Math.min(fov, hFov) / 2)) * 1.08
+    return (radius / Math.sin(Math.min(fov, hFov) / 2)) * 1.32
   }
 
   private rebuild(opts: { refit: boolean; then: ViewPreset | null }): void {
