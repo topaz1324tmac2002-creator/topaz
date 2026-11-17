@@ -2,8 +2,13 @@
  * 스톤 윤곽(outline) — 보석 모양별 2D 실루엣과 그 위의 점·법선 계산.
  *
  * 석재 로컬 좌표계: +Y 가 바깥(반지 반경 방향), 거들(girdle) 평면은 XZ.
- *  · x = 접선 방향(긴 축), z = 반지 축 방향
- * 윤곽은 x ∈ [-1, 1] 로 정규화하고, z 는 [-1/aspect, 1/aspect] 입니다.
+ *  · x = 긴 축(접선 방향), z = 폭(반지 축 방향)
+ *
+ * 정규화 규칙 — 모든 윤곽은 "폭(짧은 축)의 반 = 1" 로 맞추고,
+ * x 방향 반길이를 aspect(길이 ÷ 폭)로 둡니다. 실제 mm 는 stoneOutlineMm 에서
+ * sizeMm / 2 를 x·z 에 똑같이 한 번만 곱합니다(sizeMm = 폭).
+ *  · 페어  aspect = 4/3  → 폭:길이 = 3:4
+ *  · 마퀴즈 aspect = 2    → 폭:길이 = 1:2
  */
 import type { Vec2 } from './ring'
 import type { StoneShape } from './types'
@@ -38,36 +43,65 @@ function ellipse(a: number, b: number, n: number): Vec2[] {
   return out
 }
 
+/** 2차 베지어 위의 점 */
+function quadBezier(p0: Vec2, c: Vec2, p1: Vec2, t: number): Vec2 {
+  const w0 = (1 - t) * (1 - t)
+  const w1 = 2 * (1 - t) * t
+  const w2 = t * t
+  return [w0 * p0[0] + w1 * c[0] + w2 * p1[0], w0 * p0[1] + w1 * c[1] + w2 * p1[1]]
+}
+
 /**
- * 물방울(페어) — 끝이 뾰족한 (1,0) 과 둥근 몸통.
- * 몸통 원: 중심 (cx,0), 반지름 R. 점 (1,0) 에서 원에 접하는 두 직선으로 이어 붙입니다.
+ * 페어(물방울) — 둥근 몸통 + 뾰족한 팁.
+ * 몸통은 반지름 R 인 원호, 팁으로 가는 양쪽 변은 살짝 볼록한 2차 베지어입니다.
+ * 폭 반 = 1, 뒤쪽 끝 x = -aspect, 팁 x = +aspect (폭:길이 = 3:4 → aspect = 4/3).
  */
 function pear(n: number): Vec2[] {
-  const R = 0.62
-  const cx = R - 1 // 왼쪽 끝이 정확히 -1 이 되도록
-  const tipX = 1
+  const L = stoneShape('pear').aspect
+  const R = 1 // 몸통 반지름(= 폭 반)
+  const cx = R - L // 몸통 중심: 뒤쪽 끝이 정확히 -L
+  const tipX = L
   const d = tipX - cx
-  const alpha = Math.acos(R / d) // 중심→점 방향에서 접점까지의 각
-  const arcN = Math.max(8, n - 2)
-  const pts: Vec2[] = []
-  // +alpha 에서 2π-alpha 까지 (π 를 지나며 둥근 몸통)
-  for (let i = 0; i <= arcN; i++) {
+  const alpha = Math.acos(R / d) // 중심→팁 방향에서 접점까지의 각
+  const arcN = Math.max(14, Math.round(n * 0.55))
+  const sideN = Math.max(4, Math.round(n * 0.18))
+  const tip: Vec2 = [tipX, 0]
+  const aUp: Vec2 = [cx + R * Math.cos(alpha), R * Math.sin(alpha)]
+  const aDn: Vec2 = [cx + R * Math.cos(-alpha), R * Math.sin(-alpha)]
+
+  // 팁 쪽 변을 살짝 볼록하게(베지어 제어점을 바깥으로 밀기)
+  const bulge = 0.055 * L
+  const side = (from: Vec2, to: Vec2, sign: number): Vec2 => {
+    const mx = (from[0] + to[0]) / 2
+    const mz = (from[1] + to[1]) / 2
+    const dx = to[0] - from[0]
+    const dz = to[1] - from[1]
+    const l = Math.hypot(dx, dz) || 1
+    return [mx + (dz / l) * bulge * sign, mz - (dx / l) * bulge * sign]
+  }
+  const cUp = side(tip, aUp, 1)
+  const cDn = side(aDn, tip, 1)
+
+  const pts: Vec2[] = [tip]
+  for (let i = 1; i <= sideN; i++) pts.push(quadBezier(tip, cUp, aUp, i / sideN))
+  for (let i = 1; i <= arcN; i++) {
     const t = alpha + ((TAU - 2 * alpha) * i) / arcN
     pts.push([cx + R * Math.cos(t), R * Math.sin(t)])
   }
-  pts.push([tipX, 0])
-  const zScale = 1 / (stoneShape('pear').aspect * R)
-  return ensureCCW(pts.map(([x, z]) => [x, z * zScale] as Vec2))
+  for (let i = 1; i < sideN; i++) pts.push(quadBezier(aDn, cDn, tip, i / sideN))
+  return ensureCCW(pts)
 }
 
-/** 마퀴즈 — 양 끝이 뾰족한 보트형(두 원호의 교집합) */
+/**
+ * 마퀴즈 — 양 끝이 뾰족하고 옆면이 볼록한 보트형(두 원호의 교집합).
+ * 폭 반 = 1, 팁 x = ±aspect (폭:길이 = 1:2 → aspect = 2).
+ */
 function marquise(n: number): Vec2[] {
-  const a = 1
-  const b = 1 / stoneShape('marquise').aspect
+  const a = stoneShape('marquise').aspect
+  const b = 1
   const R = (a * a + b * b) / (2 * b)
   const cz = b - R // 원 중심(아래쪽)
-  const half = Math.max(6, Math.round(n / 2))
-  // 왼쪽 끝(-a,0) → 위(0,b) → 오른쪽 끝(+a,0)
+  const half = Math.max(12, Math.round(n / 2))
   const th0 = Math.atan2(-cz / R, -a / R)
   const th1 = Math.atan2(-cz / R, a / R)
   const upper: Vec2[] = []
@@ -83,11 +117,11 @@ function marquise(n: number): Vec2[] {
   return ensureCCW([...upper, ...lower])
 }
 
-/** 에메랄드컷 — 모서리를 깎은 직사각형(스텝 컷). 각 모서리는 평면을 유지합니다. */
-function emerald(): Vec2[] {
-  const hx = 1
-  const hz = 1 / stoneShape('emerald').aspect
-  const c = 0.24 // 모서리 깎기
+/** 에메랄드컷 — 모서리를 깎은 직사각형(스텝 컷). 각 변은 평면을 유지합니다. */
+function emerald(n: number): Vec2[] {
+  const hx = stoneShape('emerald').aspect
+  const hz = 1
+  const c = 0.26 // 모서리 깎기(폭 기준)
   const corners: Vec2[] = [
     [hx - c, hz],
     [hx, hz - c],
@@ -98,9 +132,9 @@ function emerald(): Vec2[] {
     [-hx, hz - c],
     [-(hx - c), hz],
   ]
-  // 각 변을 6등분해 스텝 컷 패싯이 정렬되도록 점을 채웁니다.
+  // 각 변을 균등 분할해 스텝 컷 패싯이 정렬되도록 점을 채웁니다.
+  const per = Math.max(3, Math.round(n / 8))
   const out: Vec2[] = []
-  const per = 6
   for (let i = 0; i < corners.length; i++) {
     const p = corners[i]
     const q = corners[(i + 1) % corners.length]
@@ -114,7 +148,7 @@ function emerald(): Vec2[] {
 
 const cache = new Map<StoneShape, Outline>()
 
-/** 모양별 정규화 윤곽(캐시) */
+/** 모양별 정규화 윤곽(캐시) — 폭 반 = 1, 긴 축 반길이 = aspect */
 export function stoneOutline(shape: StoneShape): Outline {
   const hit = cache.get(shape)
   if (hit) return hit
@@ -122,35 +156,37 @@ export function stoneOutline(shape: StoneShape): Outline {
   let pts: Vec2[]
   switch (shape) {
     case 'round':
-      pts = ellipse(1, 1 / spec.aspect, 48)
+      pts = ellipse(1, 1, 64)
       break
     case 'oval':
-      pts = ellipse(1, 1 / spec.aspect, 56)
+      pts = ellipse(spec.aspect, 1, 72)
       break
     case 'cabochon':
-      pts = ellipse(1, 1 / spec.aspect, 48)
+      pts = ellipse(spec.aspect, 1, 64)
       break
     case 'pear':
-      pts = pear(44)
+      pts = pear(56)
       break
     case 'marquise':
-      pts = marquise(48)
+      pts = marquise(64)
       break
     case 'emerald':
-      pts = emerald()
+      pts = emerald(48)
       break
     default:
-      pts = ellipse(1, 1, 48)
+      pts = ellipse(1, 1, 64)
   }
   cache.set(shape, pts)
   return pts
 }
 
-/** 정규화 윤곽을 (aspect 곱한) 실제 크기로: 긴 축 = sizeMm × aspect */
+/**
+ * 실제 크기(mm) 윤곽 — sizeMm 는 "폭(짧은 축)" 입니다.
+ * 긴 축 = sizeMm × aspect (페어 3:4 → 1.333배, 마퀴즈 1:2 → 2배).
+ */
 export function stoneOutlineMm(shape: StoneShape, sizeMm: number): Vec2[] {
-  const spec = stoneShape(shape)
   const k = sizeMm / 2
-  return stoneOutline(shape).map(([x, z]) => [x * k * spec.aspect, z * k] as Vec2)
+  return stoneOutline(shape).map(([x, z]) => [x * k, z * k] as Vec2)
 }
 
 /** 정규화 윤곽 점을 비율만큼 확대/축소 */
@@ -182,10 +218,21 @@ export function outlineNormals(points: Outline): Vec2[] {
   return out
 }
 
-/** 윤곽을 바깥 법선 방향으로 d mm 만큼 확장합니다. */
-export function offsetOutline(points: Outline, d: number): Vec2[] {
+/**
+ * 윤곽을 바깥 법선 방향으로 d mm 만큼 확장합니다.
+ * 뾰족한 팁(페어·마퀴즈)에서도 벽 두께가 일정하도록 마이터(miter) 보정을 넣었습니다:
+ * 이웃 두 변이 이루는 절반각 β 에 대해 d / cos β 만큼 밀어냅니다.
+ */
+export function offsetOutline(points: Outline, d: number, maxMiter = 4): Vec2[] {
   const normals = outlineNormals(points)
-  return points.map(([x, z], i) => [x + normals[i][0] * d, z + normals[i][1] * d] as Vec2)
+  return points.map(([x, z], i) => {
+    const n = normals[i]
+    // 이 정점에서의 실제 벽 두께(코사인 보정) → 마이터 길이
+    const prev = normals[(i - 1 + points.length) % points.length]
+    const cosHalf = Math.max(0.25, Math.min(1, n[0] * prev[0] + n[1] * prev[1]))
+    const miter = Math.min(maxMiter, 1 / cosHalf)
+    return [x + n[0] * d * miter, z + n[1] * d * miter] as Vec2
+  })
 }
 
 export function outlinePerimeter(points: Outline): number {
@@ -196,6 +243,75 @@ export function outlinePerimeter(points: Outline): number {
     s += Math.hypot(b[0] - a[0], b[1] - a[1])
   }
   return s
+}
+
+/** 윤곽 면적(부호 없음) */
+export function outlineArea(points: Outline): number {
+  return Math.abs(signedArea(points))
+}
+
+/**
+ * 패싯 링용 t 배분 — 호 길이에 곡률 가중을 더합니다.
+ * 균등 호 길이로 나누면 페어·마퀴즈의 뾰족한 팁 옆이 긴 현(chord)으로 잘려
+ * 팁이 뭉툭해 보이므로, 곡률이 큰 구간(팁·모서리)에 점을 촘촘히 둡니다.
+ * 원·타원처럼 곡률이 일정한 윤곽에서는 균등 배분과 같습니다.
+ */
+export function sampleTs(points: Outline, count: number, bias = 0.6): number[] {
+  const n = points.length
+  const seg: number[] = []
+  let total = 0
+  for (let i = 0; i < n; i++) {
+    const a = points[i]
+    const b = points[(i + 1) % n]
+    const l = Math.hypot(b[0] - a[0], b[1] - a[1])
+    seg.push(l)
+    total += l
+  }
+  if (total < 1e-9) return Array.from({ length: count }, (_, k) => k / count)
+  // 꼭짓점별 회전각(rad)
+  const turn: number[] = []
+  for (let i = 0; i < n; i++) {
+    const p = points[(i - 1 + n) % n]
+    const a = points[i]
+    const b = points[(i + 1) % n]
+    const ax = a[0] - p[0]
+    const az = a[1] - p[1]
+    const bx = b[0] - a[0]
+    const bz = b[1] - a[1]
+    const la = Math.hypot(ax, az) || 1
+    const lb = Math.hypot(bx, bz) || 1
+    const c = Math.max(-1, Math.min(1, (ax * bx + az * bz) / (la * lb)))
+    turn.push(Math.acos(c))
+  }
+  // 구간 가중치 = 길이 × (1 + bias × 그 구간이 감싸는 회전각 / 기준 회전각)
+  const ref = Math.PI / 16
+  const w: number[] = []
+  let wsum = 0
+  for (let i = 0; i < n; i++) {
+    const t = (turn[i] + turn[(i + 1) % n]) / 2
+    const wi = seg[i] * (1 + (bias * Math.min(t, Math.PI / 2)) / ref)
+    w.push(wi)
+    wsum += wi
+  }
+  const ts: number[] = []
+  for (let k = 0; k < count; k++) {
+    const target = (wsum * k) / count
+    let acc = 0
+    let t = 0
+    for (let i = 0; i < n; i++) {
+      if (acc + w[i] >= target || i === n - 1) {
+        const f = w[i] < 1e-12 ? 0 : (target - acc) / w[i]
+        // 가중 위치 → 같은 구간 안의 호 길이 위치
+        let arc = 0
+        for (let j = 0; j < i; j++) arc += seg[j]
+        t = (arc + seg[i] * f) / total
+        break
+      }
+      acc += w[i]
+    }
+    ts.push(t)
+  }
+  return ts
 }
 
 /** 호 길이 기준 t(0~1) 위치의 윤곽 점과 바깥 법선 */
@@ -220,4 +336,37 @@ export function sampleOutline(points: Outline, t: number): { x: number; z: numbe
     acc += len
   }
   return { x: points[0][0], z: points[0][1], nx: 1, nz: 0 }
+}
+
+/**
+ * 원점에서 각도 θ 방향으로 윤곽까지의 거리(반지름).
+ * 모든 스톤 윤곽은 원점에 대해 별 모양(star-shaped)이므로 교차점이 하나입니다.
+ */
+export function outlineRadiusAt(points: Outline, theta: number): number {
+  const dx = Math.cos(theta)
+  const dz = Math.sin(theta)
+  let best = 0
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i]
+    const b = points[(i + 1) % points.length]
+    const ex = b[0] - a[0]
+    const ez = b[1] - a[1]
+    const den = dx * ez - dz * ex
+    if (Math.abs(den) < 1e-12) continue
+    const t = (a[0] * ez - a[1] * ex) / den // 광선 매개변수
+    const u = (a[0] * dz - a[1] * dx) / den // 선분 매개변수
+    if (t > 0 && u >= -1e-9 && u <= 1 + 1e-9 && t > best) best = t
+  }
+  return best
+}
+
+/** 윤곽의 x/z 반지름(바운딩 박스) */
+export function outlineExtents(points: Outline): { hx: number; hz: number } {
+  let hx = 0
+  let hz = 0
+  for (const [x, z] of points) {
+    hx = Math.max(hx, Math.abs(x))
+    hz = Math.max(hz, Math.abs(z))
+  }
+  return { hx, hz }
 }

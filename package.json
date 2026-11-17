@@ -9,7 +9,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "verify": "esbuild scripts/verify-core.ts --bundle --platform=node --format=esm --outfile=.verify/verify.mjs --log-level=warning && node .verify/verify.mjs"
+    "verify": "esbuild scripts/verify-core.ts --bundle --platform=node --format=esm --outfile=.verify/verify.mjs --log-level=warning && node .verify/verify.mjs",
+    "preview:geo": "esbuild scripts/preview.ts --bundle --platform=node --format=esm --outfile=.verify/preview.mjs --log-level=warning && node .verify/preview.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

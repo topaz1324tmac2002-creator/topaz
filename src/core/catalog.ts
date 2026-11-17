@@ -51,16 +51,21 @@ export const COMFORT: { id: ComfortFit; label: string; k: number }[] = [
 ]
 
 export const STONE_SHAPES: { id: StoneShape; label: string; cut: StoneCut; aspect: number; hint: string }[] = [
-  { id: 'round', label: '라운드', cut: 'brilliant', aspect: 1, hint: '브릴리언트 컷 — 58면 상당의 원형 팩팅' },
-  { id: 'oval', label: '오벌', cut: 'brilliant', aspect: 1.4, hint: '브릴리언트 컷 타원형 (긴 축 1.4배)' },
-  { id: 'pear', label: '페어', cut: 'brilliant', aspect: 1.5, hint: '브릴리언트 컷 물방울형 (긴 축 1.5배)' },
-  { id: 'marquise', label: '마퀴즈', cut: 'brilliant', aspect: 1.9, hint: '브릴리언트 컷 보트형 — 양 끝이 뾰족합니다' },
+  { id: 'round', label: '라운드', cut: 'brilliant', aspect: 1, hint: '브릴리언트 컷 — 원형. 8개의 카이트(비젤)·8개의 스타·16개의 어퍼 거들 면' },
+  { id: 'oval', label: '오벌', cut: 'brilliant', aspect: 1.4, hint: '브릴리언트 컷 타원형 — 폭:길이 = 1:1.4 (정석 오벌 비율)' },
+  { id: 'pear', label: '페어', cut: 'brilliant', aspect: 4 / 3, hint: '브릴리언트 컷 물방울형 — 폭:길이 = 3:4, 둥근 몸통 + 뾰족한 팁' },
+  { id: 'marquise', label: '마퀴즈', cut: 'brilliant', aspect: 2, hint: '브릴리언트 컷 보트형 — 폭:길이 = 1:2, 양 끝이 뾰족합니다' },
   { id: 'emerald', label: '에메랄드컷', cut: 'step', aspect: 1.3, hint: '스텝 컷 — 모서리를 깎은 직사각형, 계단형 면' },
   { id: 'cabochon', label: '캐보션', cut: 'cabochon', aspect: 1.15, hint: '패싯 없이 매끈하게 연마한 볼록 돔' },
 ]
 
 export function stoneShape(id: StoneShape): (typeof STONE_SHAPES)[number] {
   return STONE_SHAPES.find((s) => s.id === id) ?? STONE_SHAPES[0]
+}
+
+/** 스톤 실측 크기 — sizeMm 는 폭(짧은 축), 길이 = 폭 × aspect */
+export function stoneDimensions(shape: StoneShape, sizeMm: number): { width: number; length: number } {
+  return { width: sizeMm, length: sizeMm * stoneShape(shape).aspect }
 }
 
 export const SETTINGS: { id: SettingType; label: string; hint: string }[] = [

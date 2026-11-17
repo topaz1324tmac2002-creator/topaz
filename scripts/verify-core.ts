@@ -215,7 +215,12 @@ console.log('\n── 스톤 & 세팅 (모양 × 세팅 조합) ──')
       gemTotal += layout.gems.length
       metalTotal += layout.metals.length
       const metalOk = layout.metals.length > 0 && layout.metals.every((m) => analyzeGeometry(m.geometry).watertight)
-      const gemOk = layout.gems.every((g) => analyzeGeometry(g.geometry).volumeMm3 > 0.2)
+      // 보석 검증은 "퇴화하지 않았는가"(수밀 + 0보다 확실히 큰 체적).
+      // 헤일로 팁처럼 곡률이 큰 자리의 메레는 실제로도 작으므로 0.2mm³ 같은 크기 하한은 두지 않습니다.
+      const gemOk = layout.gems.every((g) => {
+        const st = analyzeGeometry(g.geometry)
+        return st.watertight && st.volumeMm3 > 0.02
+      })
       if (!metalOk || !gemOk) {
         allOk = false
         bad.push(shape)
