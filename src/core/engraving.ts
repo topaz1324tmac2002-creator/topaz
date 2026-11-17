@@ -251,7 +251,8 @@ export function buildEngraving(params: EngravingParams, ctx: EngravingContext): 
         a += mod.da
       }
       positions.push(r * Math.sin(theta), r * Math.cos(theta), a)
-      uvs.push(t, v)
+      // u 를 뒤집어야 정면에서 봤을 때 글자가 좌우 반전되지 않습니다.
+      uvs.push(1 - t, v)
     }
   }
   for (let i = 0; i < segT; i++) {
