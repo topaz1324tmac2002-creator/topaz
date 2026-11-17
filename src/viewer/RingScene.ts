@@ -381,6 +381,9 @@ export class RingScene {
     if (first || opts.refit) this.fitCamera()
     if (first) this.applyView('front', false)
     if (opts.then) this.applyView(opts.then, true)
+    // 어떤 경로로 재구성했든 화면을 다시 그려야 합니다(스톤 개수·모양·세팅 변경은
+    // 카메라가 그대로라 렌더 온디맨드가 발화하지 않습니다).
+    this.needsRender = true
     this.emitMetrics()
   }
 
