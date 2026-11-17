@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore, type TabId } from './store'
-import { METALS } from './core/catalog'
+import { METALS, stoneShape } from './core/catalog'
 import { weightGrams } from './core/measure'
 import { RingViewer, type ViewerApi } from './viewer/RingViewer'
 import type { SceneMetrics } from './viewer/RingScene'
 import { BandPanel } from './components/BandPanel'
 import { StonePanel } from './components/StonePanel'
-import { SculptPanel } from './components/SculptPanel'
 import { EngravePanel } from './components/EngravePanel'
 import { MaterialPanel } from './components/MaterialPanel'
 import { ExportPanel } from './components/ExportPanel'
@@ -14,13 +13,10 @@ import { ExportPanel } from './components/ExportPanel'
 const TABS: { id: TabId; label: string }[] = [
   { id: 'band', label: '밴드' },
   { id: 'stone', label: '스톤' },
-  { id: 'sculpt', label: '조형' },
   { id: 'engrave', label: '각인' },
   { id: 'material', label: '재질' },
   { id: 'export', label: 'STL' },
 ]
-
-const BRUSH_LABEL: Record<string, string> = { push: '밀기', pull: '당기기', smooth: '스무스' }
 
 function useIsWide(): boolean {
   const [wide, setWide] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth >= 1024))
@@ -37,16 +33,11 @@ export default function App(): JSX.Element {
   const design = useStore((s) => s.design)
   const tab = useStore((s) => s.tab)
   const setTab = useStore((s) => s.setTab)
-  const sculptMode = useStore((s) => s.sculptMode)
-  const setSculptMode = useStore((s) => s.setSculptMode)
-  const brushRadiusMm = useStore((s) => s.brushRadiusMm)
-  const brushStrength = useStore((s) => s.brushStrength)
   const highQuality = useStore((s) => s.highQuality)
   const undo = useStore((s) => s.undo)
   const redo = useStore((s) => s.redo)
   const canUndo = useStore((s) => s.undoStack.length > 0)
   const canRedo = useStore((s) => s.redoStack.length > 0)
-  const sculptAction = useStore((s) => s.sculptAction)
   const toast = useStore((s) => s.toast)
   const showToast = useStore((s) => s.showToast)
 
@@ -56,10 +47,8 @@ export default function App(): JSX.Element {
 
   const metal = METALS[design.metal]
   const grams = weightGrams(metrics?.measure.metalVolumeCm3 ?? 0, metal)
-  const leftTabs = useMemo(
-    () => TABS.filter((t) => t.id === 'band' || t.id === 'stone' || t.id === 'sculpt' || t.id === 'engrave'),
-    [],
-  )
+  const shapeLabel = stoneShape(design.stone.shape).label
+  const leftTabs = useMemo(() => TABS, [])
   const activeLeft = leftTabs.some((t) => t.id === tab) ? tab : 'band'
 
   const panelFor = (id: TabId): JSX.Element => {
@@ -68,8 +57,6 @@ export default function App(): JSX.Element {
         return <BandPanel />
       case 'stone':
         return <StonePanel warnings={metrics?.warnings ?? []} />
-      case 'sculpt':
-        return <SculptPanel />
       case 'engrave':
         return <EngravePanel />
       case 'material':
@@ -112,6 +99,11 @@ export default function App(): JSX.Element {
           <span className="chip">KS {design.band.sizeKR}호</span>
           <span className="chip">{design.band.widthMm.toFixed(1)}mm</span>
           <span className="chip">{metal.short}</span>
+          {design.stone.count > 0 ? (
+            <span className="chip">
+              {shapeLabel} × {design.stone.count}
+            </span>
+          ) : null}
           <span className="chip strong">{grams.toFixed(2)}g</span>
         </div>
 
@@ -129,26 +121,30 @@ export default function App(): JSX.Element {
         <section className="viewport-wrap">
           <RingViewer
             design={design}
-            sculptMode={sculptMode}
-            brushRadius={brushRadiusMm}
-            brushStrength={brushStrength}
             highQuality={highQuality}
             onMetrics={setMetrics}
             onNotice={showToast}
             apiRef={apiRef}
-            sculptAction={sculptAction}
           />
 
-          {sculptMode !== 'off' ? (
-            <div className="sculpt-pill">
-              <span className="sculpt-pill-label">
-                조형 중 · {BRUSH_LABEL[sculptMode]} {brushRadiusMm.toFixed(1)}mm · {Math.round(brushStrength * 100)}%
-              </span>
-              <button type="button" className="btn ghost" onClick={() => setSculptMode('off')}>
-                조형 종료
-              </button>
-            </div>
-          ) : null}
+          <div className="view-buttons">
+            <button
+              type="button"
+              className="btn ghost"
+              onClick={() => apiRef.current?.setView('front')}
+              title="정면에서 보기"
+            >
+              앞
+            </button>
+            <button
+              type="button"
+              className="btn ghost"
+              onClick={() => apiRef.current?.setView('right')}
+              title="밴드 폭과 단면이 보이는 우측에서 보기"
+            >
+              우측
+            </button>
+          </div>
 
           <div className="viewport-foot">
             <span>V {metrics?.measure.metalVolumeCm3.toFixed(3) ?? '0.000'} cm³</span>
@@ -161,19 +157,10 @@ export default function App(): JSX.Element {
         </section>
 
         {isWide ? (
-          <>
-            <aside className="panel panel-left">
-              {leftTabStrip}
-              <div className="panel-scroll">{panelFor(activeLeft)}</div>
-            </aside>
-            <aside className="panel panel-right">
-              <div className="panel-scroll">
-                <MaterialPanel />
-                <div className="panel-divider" />
-                <ExportPanel metrics={metrics} onExportSTL={(includeGems) => apiRef.current?.exportSTL(includeGems)} />
-              </div>
-            </aside>
-          </>
+          <aside className="panel panel-left">
+            {leftTabStrip}
+            <div className="panel-scroll">{panelFor(activeLeft)}</div>
+          </aside>
         ) : (
           <section className="sheet">
             <div className="tabstrip sheet-tabs">

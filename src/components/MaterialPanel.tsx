@@ -1,5 +1,5 @@
 import { useStore } from '../store'
-import { ENVIRONMENTS, METALS, METAL_ORDER } from '../core/catalog'
+import { ENVIRONMENTS, GEMS, GEM_ORDER, METALS, METAL_ORDER } from '../core/catalog'
 import { Segmented, Section, Toggle } from './controls'
 
 function swatchColor(hex: number): string {
@@ -9,6 +9,8 @@ function swatchColor(hex: number): string {
 export function MaterialPanel(): JSX.Element {
   const metal = useStore((s) => s.design.metal)
   const environment = useStore((s) => s.design.environment)
+  const gem = useStore((s) => s.design.stone.gem)
+  const patchStone = useStore((s) => s.patchStone)
   const highQuality = useStore((s) => s.highQuality)
   const setHighQuality = useStore((s) => s.setHighQuality)
   const setMetal = useStore((s) => s.setMetal)
@@ -44,6 +46,38 @@ export function MaterialPanel(): JSX.Element {
         </div>
       </Section>
 
+      <Section title="보석 재질" aside={<span className="badge">{GEMS[gem].short}</span>}>
+        <div className="metal-grid">
+          {GEM_ORDER.map((id) => {
+            const g = GEMS[id]
+            return (
+              <button
+                key={id}
+                type="button"
+                className={`metal${id === gem ? ' is-active' : ''}`}
+                onClick={() => patchStone({ gem: id }, 'stone:gem')}
+                aria-pressed={id === gem}
+              >
+                <span
+                  className="metal-swatch"
+                  style={{
+                    background: `radial-gradient(circle at 32% 28%, #ffffffcc 0%, ${swatchColor(g.color)} 42%, #00000088 100%)`,
+                  }}
+                />
+                <span className="metal-name">{g.name}</span>
+                <span className="metal-meta">
+                  IOR {g.ior.toFixed(2)} · 투과 {Math.round(g.transmission * 100)}%
+                </span>
+              </button>
+            )
+          })}
+        </div>
+        <p className="field-hint">
+          루비·사파이어는 코런덤(IOR 1.77), 시트린은 석영(IOR 1.55), 토파즈는 스위스 블루(IOR 1.62) 값으로
+          렌더링됩니다.
+        </p>
+      </Section>
+
       <Section title="조명 환경">
         <Segmented
           value={environment}
@@ -60,7 +94,7 @@ export function MaterialPanel(): JSX.Element {
         <Toggle
           label="보석 투과광 (고품질)"
           checked={highQuality}
-          hint="켜면 다이아몬드가 빛을 통과시키는 물리 기반 재질로 렌더링됩니다. GPU 부담이 커서 아이패드 구형 기기·소프트웨어 렌더러에서는 자동으로 꺼집니다."
+          hint="켜면 보석이 빛을 통과시키는 물리 기반 재질로 렌더링됩니다. GPU 부담이 커서 아이패드 구형 기기·소프트웨어 렌더러에서는 자동으로 꺼집니다."
           onChange={setHighQuality}
         />
       </Section>

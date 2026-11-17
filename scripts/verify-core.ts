@@ -6,12 +6,13 @@
  */
 import * as THREE from 'three'
 import { buildProfile, buildRing } from '../src/core/ring'
-import { buildStones } from '../src/core/stones'
+import { buildStones, buildGemGeometry, buildMeleeGeometry, estimateCarat } from '../src/core/stones'
+import { surfaceRadius, ENGRAVE_STANDOFF_MM } from '../src/core/engraving'
+import { stoneOutlineMm, outlinePerimeter, sampleOutline } from '../src/core/shapes'
 import { analyzeGeometry, measure, weightGrams } from '../src/core/measure'
 import { buildBinarySTL, countTriangles, stlFileName } from '../src/core/stl'
-import { METALS, innerCircumference, innerDiameterToUs, ksToInnerDiameter } from '../src/core/catalog'
-import { applyBrush, buildSculptMesh } from '../src/core/sculpt'
-import { DEFAULT_DESIGN, type BandParams, type Design, type ProfileId } from '../src/core/types'
+import { GEMS, GEM_ORDER, METALS, SETTINGS, STONE_SHAPES, innerCircumference, innerDiameterToUs, ksToInnerDiameter } from '../src/core/catalog'
+import { DEFAULT_DESIGN, type BandParams, type Design, type ProfileId, type SettingType, type StoneShape } from '../src/core/types'
 
 let failed = 0
 const check = (name: string, ok: boolean, detail = ''): void => {
@@ -33,7 +34,7 @@ check('KS 12호 → US 약 6.2호', near(innerDiameterToUs(d12), 6.2, 0.02), inn
 check('KS 12호 안둘레 52.4mm', near(innerCircumference(d12), 52.36, 0.01), innerCircumference(d12).toFixed(2))
 
 console.log('\n── 단면 프로파일 (KS12 · 폭4.0 · 두께1.8) ──')
-const profiles: ProfileId[] = ['dome', 'flat', 'bevel']
+const profiles: ProfileId[] = ['dome', 'flat', 'bevel', 'twist']
 for (const profile of profiles) {
   const b = band({ profile })
   const p = buildProfile(b)
@@ -44,7 +45,8 @@ for (const profile of profiles) {
     stats.openEdges === 0 && stats.nonManifoldEdges === 0,
     `열린 엣지 ${stats.openEdges}, 비다양체 ${stats.nonManifoldEdges}, 삼각형 ${stats.triangles}`,
   )
-  check(`${profile}: 최대 반경이 두께 이하`, ring.profileMaxRadial <= b.thicknessMm + 1e-6, `${ring.profileMaxRadial.toFixed(3)}mm`)
+  const limit = b.thicknessMm + (profile === 'twist' ? Math.min(0.45, Math.max(0.18, b.thicknessMm * 0.24)) + 1e-6 : 1e-6)
+  check(`${profile}: 최대 반경이 단면 두께 범위 안`, ring.profileMaxRadial <= limit, `${ring.profileMaxRadial.toFixed(3)}mm ≤ ${limit.toFixed(3)}mm`)
   check(`${profile}: 단면적 > 0`, p.area > 1, `${p.area.toFixed(2)}mm²`)
   console.log(
     `   · ${profile}: 체적 ${(stats.volumeMm3 / 1000).toFixed(3)}cm³ · 18K ${weightGrams(stats.volumeMm3 / 1000, METALS.gold18k).toFixed(2)}g · 925 ${weightGrams(
@@ -52,6 +54,44 @@ for (const profile of profiles) {
       METALS.silver925,
     ).toFixed(2)}g`,
   )
+}
+
+console.log('\n── 트위스트(나선 리브) 밴드 ──')
+{
+  const b = band({ profile: 'twist' })
+  const ring = buildRing(b)
+  const geo = ring.geometry
+  const pos = geo.getAttribute('position') as THREE.BufferAttribute
+  let minR = Infinity
+  let maxR = 0
+  for (let i = 0; i < pos.count; i++) {
+    const r = Math.hypot(pos.getX(i), pos.getY(i))
+    minR = Math.min(minR, r)
+    maxR = Math.max(maxR, r)
+  }
+  check('트위스트: 안쪽 원통면 유지(내경 동일)', near(minR, ring.innerRadiusMm, 1e-6), `최소 반경 ${minR.toFixed(4)}mm / 내경 반경 ${ring.innerRadiusMm.toFixed(4)}mm`)
+  check(
+    '트위스트: 리브가 바깥으로만 솟는다',
+    maxR <= ring.innerRadiusMm + ring.profileMaxRadial + 1e-3,
+    `최대 ${maxR.toFixed(3)}mm ≤ ${(ring.innerRadiusMm + ring.profileMaxRadial).toFixed(3)}mm`,
+  )
+  const stats = analyzeGeometry(geo)
+  check('트위스트: 수밀(주물 가능)', stats.watertight, `열린 엣지 ${stats.openEdges}`)
+  // 리브가 실제로 반경을 흔드는지(평평한 회전체가 아닌지)
+  let varSum = 0
+  let n = 0
+  const seg = ring.segments
+  for (let j = 0; j < pos.count; j += 1) {
+    const idx = j
+    // 같은 축방향·프로파일 위치에서 이웃 각도끼리 반경 차이를 봅니다.
+    if (idx % seg === 0 && idx + seg < pos.count) {
+      const r1 = Math.hypot(pos.getX(idx), pos.getY(idx))
+      const r2 = Math.hypot(pos.getX(idx + seg), pos.getY(idx + seg))
+      varSum += Math.abs(r1 - r2)
+      n++
+    }
+  }
+  check('트위스트: 각도에 따라 반경이 변한다', n > 0 && varSum / Math.max(1, n) > 0.01, `평균 인접 편차 ${(varSum / Math.max(1, n)).toFixed(4)}mm`)
 }
 
 console.log('\n── 파푸스 정리와 대조 (평면 밴드 체적) ──')
@@ -77,16 +117,82 @@ console.log('\n── 컴포트 핏 ──')
   check('컴포트 핏 메쉬도 수밀', analyzeGeometry(ringStrong.geometry).watertight)
 }
 
-console.log('\n── 스톤 & 세팅 ──')
+console.log('\n── 스톤 모양 6종 (브릴리언트 · 스텝 · 캐보션) ──')
+{
+  const shapes: StoneShape[] = ['round', 'oval', 'pear', 'marquise', 'emerald', 'cabochon']
+  for (const shape of shapes) {
+    const spec = STONE_SHAPES.find((s) => s.id === shape)!
+    const geo = buildGemGeometry(shape, 5)
+    const stats = analyzeGeometry(geo)
+    const outline = stoneOutlineMm(shape, 5)
+    const longAxis = Math.max(...outline.map((p) => Math.abs(p[0]))) * 2
+    check(
+      `${spec.label}: 보석 메쉬 수밀 · 체적 > 0`,
+      stats.watertight && stats.volumeMm3 > 1,
+      `${stats.volumeMm3.toFixed(1)}mm³ · 삼각형 ${stats.triangles} · 열린 엣지 ${stats.openEdges}`,
+    )
+    check(
+      `${spec.label}: 긴 축 = ${(5 * spec.aspect).toFixed(1)}mm`,
+      near(longAxis, 5 * spec.aspect, 0.02),
+      `실제 ${longAxis.toFixed(2)}mm · 외곽 길이 ${outlinePerimeter(outline).toFixed(2)}mm`,
+    )
+    const carat = estimateCarat(5, shape)
+    check(`${spec.label}: 캐럿 추정 > 0`, carat > 0.1, `${carat.toFixed(2)}ct`)
+  }
+  // 브릴리언트/스텝은 각 면이 납작하게 보이도록 비색인(flat) 지오메트리,
+  // 캐보션은 매끈한 곡면이 되도록 색인(smooth) 지오메트리를 유지합니다.
+  const faceted = ['round', 'oval', 'pear', 'marquise', 'emerald'] as StoneShape[]
+  const flatOk = faceted.every((sh) => buildGemGeometry(sh, 5).getIndex() === null)
+  check('브릴리언트·스텝 컷: 납작한 패싯(비색인 + 면 법선)', flatOk)
+  check('캐보션: 매끈한 곡면(색인 + 정점 법선)', buildGemGeometry('cabochon', 5).getIndex() !== null)
+  const emeraldOutline = stoneOutlineMm('emerald', 5)
+  const corners = emeraldOutline.filter((p, i) => {
+    const a = emeraldOutline[(i - 1 + emeraldOutline.length) % emeraldOutline.length]
+    const b = emeraldOutline[(i + 1) % emeraldOutline.length]
+    const v1 = [p[0] - a[0], p[1] - a[1]]
+    const v2 = [b[0] - p[0], b[1] - p[1]]
+    const cos = (v1[0] * v2[0] + v1[1] * v2[1]) / (Math.hypot(...v1) * Math.hypot(...v2) || 1)
+    return cos < Math.cos((20 * Math.PI) / 180)
+  })
+  check('에메랄드컷: 깎은 모서리 8개(직사각형 스텝 컷)', corners.length === 8, `모서리 ${corners.length}개`)
+
+  // 스톤마다 밴드 안쪽을 뚫지 않는지(모양 × 세팅)
+  const ringForStone = buildRing(band())
+  for (const shape of shapes) {
+    const laid = buildStones(
+      { ...DEFAULT_DESIGN.stone, shape, setting: 'halo', count: 1, sizeMm: 6 },
+      { outerRadiusMm: ringForStone.outerRadiusMm, profileRadial: ringForStone.profileMaxRadial },
+    )
+    let minR = Infinity
+    for (const g of laid.gems) {
+      const p = g.geometry.getAttribute('position') as THREE.BufferAttribute
+      for (let i = 0; i < p.count; i++) {
+        const v = new THREE.Vector3(p.getX(i), p.getY(i), p.getZ(i)).applyMatrix4(g.matrix)
+        minR = Math.min(minR, Math.hypot(v.x, v.y))
+      }
+    }
+    check(`${shape}: 보석이 손가락 면을 뚫지 않는다`, minR > ringForStone.innerRadiusMm - 0.01, `최소 반경 ${minR.toFixed(2)}mm ≥ ${ringForStone.innerRadiusMm.toFixed(2)}mm`)
+  }
+  const melee = analyzeGeometry(buildMeleeGeometry(1.2))
+  check('메레 스톤(라운드 브릴리언트) 수밀', melee.watertight, `삼각형 ${melee.triangles}`)
+}
+
+console.log('\n── 보석 색 5종 ──')
+{
+  check('보석 프리셋 5종', GEM_ORDER.length === 5, GEM_ORDER.map((id) => GEMS[id].name).join(' · '))
+  const iors = GEM_ORDER.map((id) => GEMS[id].ior)
+  check('굴절률이 서로 구분된다', new Set(iors.map((v) => v.toFixed(2))).size >= 4, iors.join(' / '))
+  check('루비는 붉은 계열', (GEMS.ruby.color >> 16) > 0x80 && (GEMS.ruby.color & 0xff) < 0x60, `#${GEMS.ruby.color.toString(16)}`)
+  check('사파이어는 푸른 계열', (GEMS.sapphire.color & 0xff) > 0x80, `#${GEMS.sapphire.color.toString(16)}`)
+  check('시트린은 황금색 계열', (GEMS.citrine.color >> 16) > 0xc0 && (GEMS.citrine.color & 0xff) < 0x60, `#${GEMS.citrine.color.toString(16)}`)
+  check('토파즈는 하늘색 계열', (GEMS.topaz.color & 0xff) > 0xb0, `#${GEMS.topaz.color.toString(16)}`)
+}
+
+console.log('\n── 스톤 & 세팅 (모양 × 세팅 조합) ──')
 {
   const ring = buildRing(band())
   const one = buildStones({ ...DEFAULT_DESIGN.stone, count: 1, sizeMm: 4 }, { outerRadiusMm: ring.outerRadiusMm })
   check('스톤 1개: 보석 1 + 세팅 부품', one.gems.length === 1 && one.metals.length > 0, `보석 ${one.gems.length}, 금속부 ${one.metals.length}`)
-  const gemStats = analyzeGeometry(one.gems[0].geometry)
-  // 보석은 화면 표시용(주물 STL에서 제외)이라 꼭짓점(팔각 폴)의 미세 구멍은 허용합니다.
-  // 주물에 들어가는 금속부(프롱·베젤·시트)만 수밀성을 보증합니다.
-  check('보석 메쉬 생성(체적 > 0)', gemStats.volumeMm3 > 1, `${gemStats.volumeMm3.toFixed(1)}mm³ · 폴 경계 엣지 ${gemStats.openEdges}`)
-  check('보석은 표시용 — 주물 STL에서 제외', true, 'STL 파트에는 금속부만 포함')
   check('프롱 금속부 수밀', one.metals.every((m) => analyzeGeometry(m.geometry).watertight))
 
   const five = buildStones({ ...DEFAULT_DESIGN.stone, count: 5, sizeMm: 3 }, { outerRadiusMm: ring.outerRadiusMm })
@@ -96,11 +202,79 @@ console.log('\n── 스톤 & 세팅 ──')
   const many = buildStones({ ...DEFAULT_DESIGN.stone, count: 9, sizeMm: 7 }, { outerRadiusMm: ring.outerRadiusMm })
   check('과밀 배치 시 경고 발생', many.warnings.length > 0, many.warnings[0]?.slice(0, 40))
 
-  const bezel = buildStones({ ...DEFAULT_DESIGN.stone, setting: 'bezel', count: 1, sizeMm: 5 }, { outerRadiusMm: ring.outerRadiusMm })
-  check('베젤 세팅 금속부 수밀', bezel.metals.every((m) => analyzeGeometry(m.geometry).watertight))
+  const settings: SettingType[] = ['prong4', 'prong6', 'bezel', 'halo', 'channel']
+  const shapes: StoneShape[] = ['round', 'oval', 'pear', 'marquise', 'emerald', 'cabochon']
+  for (const setting of settings) {
+    const label = SETTINGS.find((s) => s.id === setting)!.label
+    let allOk = true
+    let gemTotal = 0
+    let metalTotal = 0
+    const bad: string[] = []
+    for (const shape of shapes) {
+      const layout = buildStones({ ...DEFAULT_DESIGN.stone, shape, setting, count: 1, sizeMm: 5 }, { outerRadiusMm: ring.outerRadiusMm })
+      gemTotal += layout.gems.length
+      metalTotal += layout.metals.length
+      const metalOk = layout.metals.length > 0 && layout.metals.every((m) => analyzeGeometry(m.geometry).watertight)
+      const gemOk = layout.gems.every((g) => analyzeGeometry(g.geometry).volumeMm3 > 0.2)
+      if (!metalOk || !gemOk) {
+        allOk = false
+        bad.push(shape)
+      }
+    }
+    check(`${label}: 6가지 모양 모두 금속부 수밀`, allOk, `${metalTotal}개 금속부 · 보석 ${gemTotal}개${bad.length ? ` · 실패 ${bad.join(',')}` : ''}`)
+  }
+
+  const halo = buildStones({ ...DEFAULT_DESIGN.stone, setting: 'halo', count: 1, sizeMm: 5, shape: 'oval' }, { outerRadiusMm: ring.outerRadiusMm })
+  check('헤일로: 센터 + 메레 링(8개 이상)', halo.gems.length >= 9, `보석 ${halo.gems.length}개`)
+  const haloPear = buildStones({ ...DEFAULT_DESIGN.stone, setting: 'halo', count: 1, sizeMm: 5, shape: 'pear' }, { outerRadiusMm: ring.outerRadiusMm })
+  check('헤일로: 페어 윤곽을 따라 배치', haloPear.gems.length >= 9, `보석 ${haloPear.gems.length}개`)
+
+  const channel = buildStones({ ...DEFAULT_DESIGN.stone, setting: 'channel', count: 1, sizeMm: 5 }, { outerRadiusMm: ring.outerRadiusMm })
+  check('채널: 센터 + 양쪽 메레 줄(6개)', channel.gems.length === 7, `보석 ${channel.gems.length}개`)
+  check('채널: 두 개의 금속 벽 + 바닥(수밀)', channel.metals.length >= 2 && channel.metals.every((m) => analyzeGeometry(m.geometry).watertight), `${channel.metals.length}개 금속부`)
 
   const none = buildStones({ ...DEFAULT_DESIGN.stone, count: 0 }, { outerRadiusMm: ring.outerRadiusMm })
   check('스톤 0개 → 부품 없음', none.gems.length === 0 && none.metals.length === 0)
+
+}
+
+console.log('\n── 각인 위치 계산 (확대·축소 가시성의 근본 원인) ──')
+{
+  const b = band()
+  const ring = buildRing(b)
+  const prof = buildProfile(b).points
+  const innerR = ring.innerRadiusMm
+  const outerAtCenter = surfaceRadius(prof, 0, 'outer')
+  const innerAtCenter = surfaceRadius(prof, 0, 'inner')
+  check('바깥면 표면 반경(중앙) = 단면 두께', near(outerAtCenter, b.thicknessMm, 0.02), `${outerAtCenter.toFixed(3)}mm`)
+  check('안쪽면 표면 반경(중앙) = 0 (원통면)', Math.abs(innerAtCenter) < 1e-6, `${innerAtCenter.toFixed(4)}mm`)
+  const innerPatch = innerR + innerAtCenter - ENGRAVE_STANDOFF_MM
+  check(
+    '안쪽 각인 패치가 손가락 구멍 쪽에 놓인다(금속 속이 아님)',
+    innerPatch < innerR && innerPatch > innerR - 0.5,
+    `패치 반경 ${innerPatch.toFixed(3)}mm < 내경 ${innerR.toFixed(3)}mm`,
+  )
+  const outerPatch = innerR + outerAtCenter + ENGRAVE_STANDOFF_MM
+  check('바깥 각인 패치가 금속 바깥에 놓인다', outerPatch > innerR + outerAtCenter, `${outerPatch.toFixed(3)}mm`)
+
+  // 폭 전체에 걸쳐 안쪽/바깥쪽 표면 반경이 단면을 벗어나지 않는지
+  let ok = true
+  const width = b.widthMm
+  for (let k = 0; k <= 32; k++) {
+    const a = -width / 2 + (width * k) / 32
+    const rIn = surfaceRadius(prof, a, 'inner')
+    const rOut = surfaceRadius(prof, a, 'outer')
+    // 컴포트 핏 필렛 때문에 안쪽 반경은 0~0.3mm 사이에서 변합니다(그게 정상).
+    if (rIn < -0.001 || rIn > 0.4 || rOut < rIn - 0.001 || rOut > b.thicknessMm + 0.001) ok = false
+  }
+  check('폭 전 구간에서 0 ≤ 안쪽 ≤ 바깥 ≤ 두께', ok)
+
+  // 평면/베벨/트위스트 단면도 같은 규칙
+  for (const profile of ['flat', 'bevel', 'twist'] as ProfileId[]) {
+    const p2 = buildProfile(band({ profile })).points
+    const rIn = surfaceRadius(p2, 0, 'inner')
+    check(`${profile}: 안쪽 표면 반경(중앙) ≈ 0`, Math.abs(rIn) < 0.02, `${rIn.toFixed(4)}mm`)
+  }
 }
 
 console.log('\n── 종합 계측 + STL ──')
@@ -119,29 +293,29 @@ console.log('\n── 종합 계측 + STL ──')
   check('STL 파일명 규칙', stlFileName({ sizeKR: 12, profile: 'dome', widthMm: 4, thicknessMm: 1.8 }) === 'ring_KS12_dome_w4.0_t1.8_v1.stl', stlFileName({ sizeKR: 12, profile: 'dome', widthMm: 4, thicknessMm: 1.8 }))
 }
 
-console.log('\n── 자유 조형(스컬프팅) ──')
+console.log('\n── 새 옵션 STL (트위스트 · 새 모양 · 헤일로 · 채널) ──')
 {
-  const ring = buildRing(band())
-  const before = new Float32Array(ring.geometry.getAttribute('position').array as Float32Array)
-  const mesh = buildSculptMesh(ring.geometry)
-  check('이웃 정점 그래프 생성', mesh.neighbors[100].length > 0, `정점 ${mesh.neighbors.length}개`)
-
-  // 바깥면 정점 하나를 골라 그 주변을 민다
-  const pos = ring.geometry.getAttribute('position') as THREE.BufferAttribute
-  const target = new THREE.Vector3(pos.getX(500), pos.getY(500), pos.getZ(500))
-  const moved = applyBrush(mesh, { point: target, radiusMm: 2, strength: 1, mode: 'push' })
-  check('브러시가 정점을 실제로 이동', moved)
-
-  const after = ring.geometry.getAttribute('position').array as Float32Array
-  let maxDisp = 0
-  for (let i = 0; i < after.length; i += 3) {
-    maxDisp = Math.max(maxDisp, Math.hypot(after[i] - before[i], after[i + 1] - before[i + 1], after[i + 2] - before[i + 2]))
+  const cases: { label: string; design: Design }[] = [
+    { label: '트위스트 단면', design: { ...DEFAULT_DESIGN, band: { ...DEFAULT_DESIGN.band, profile: 'twist' } } },
+    { label: '페어 + 헤일로', design: { ...DEFAULT_DESIGN, stone: { ...DEFAULT_DESIGN.stone, shape: 'pear', setting: 'halo' } } },
+    { label: '마퀴즈 + 베젤', design: { ...DEFAULT_DESIGN, stone: { ...DEFAULT_DESIGN.stone, shape: 'marquise', setting: 'bezel' } } },
+    { label: '에메랄드 + 채널', design: { ...DEFAULT_DESIGN, stone: { ...DEFAULT_DESIGN.stone, shape: 'emerald', setting: 'channel' } } },
+    { label: '캐보션 + 프롱6', design: { ...DEFAULT_DESIGN, stone: { ...DEFAULT_DESIGN.stone, shape: 'cabochon', setting: 'prong6' } } },
+    { label: '루비 오벌', design: { ...DEFAULT_DESIGN, stone: { ...DEFAULT_DESIGN.stone, shape: 'oval', gem: 'ruby', setting: 'halo' } } },
+  ]
+  for (const c of cases) {
+    const ring = buildRing(c.design.band)
+    const stones = buildStones(c.design.stone, { outerRadiusMm: ring.outerRadiusMm })
+    const m = measure({ bandGeometry: ring.geometry, metalParts: stones.metals, gemCount: stones.gems.length })
+    const parts = [{ geometry: ring.geometry, matrix: new THREE.Matrix4() }, ...stones.metals]
+    const blob = buildBinarySTL(parts, { header: c.label })
+    const tris = countTriangles(parts)
+    check(
+      `${c.label}: STL 수밀 · 정상 크기`,
+      m.allWatertight && blob.size === 84 + tris * 50,
+      `삼각형 ${tris} · 금속 ${m.metalVolumeCm3.toFixed(3)}cm³ · 보석 ${stones.gems.length}개`,
+    )
   }
-  check('변위가 합리적 범위(< 1mm)', maxDisp > 0.01 && maxDisp < 1, `최대 ${maxDisp.toFixed(3)}mm`)
-
-  applyBrush(mesh, { point: target, radiusMm: 2, strength: 1, mode: 'smooth' })
-  const stats = analyzeGeometry(ring.geometry)
-  check('조형 후에도 위상 유지(수밀)', stats.watertight, `열린 엣지 ${stats.openEdges}`)
 }
 
 console.log('\n── 금속 6종 중량 (KS12 · 폭4.0 · 두께1.8 돔) ──')

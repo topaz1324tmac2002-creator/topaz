@@ -1,22 +1,20 @@
 /**
- * 뷰포트 — three.js 씬(카메라·조명·환경맵·오빗 컨트롤·조형 브러시·실시간 금속 렌더링).
+ * 뷰포트 — three.js 씬(카메라·조명·환경맵·오빗 컨트롤·실시간 금속/보석 렌더링).
  * React에는 이 클래스의 인스턴스만 넘기고, 상태 변경은 메서드로 반영합니다.
  */
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
-import { buildProfile, buildRing, type RingBuild } from '../core/ring'
+import { buildProfile, buildRing, type RingBuild, type TwistSpec } from '../core/ring'
 import { buildStones, type MeshPart } from '../core/stones'
 import { buildEngraving, makeEngravingMaterial } from '../core/engraving'
-import { applyBrush, buildSculptMesh, resetSculpt, type SculptMesh } from '../core/sculpt'
-import { METALS } from '../core/catalog'
+import { GEMS, METALS } from '../core/catalog'
 import { buildBinarySTL, countTriangles, stlFileName, type StlPart } from '../core/stl'
 import { measure, type MeasureResult } from '../core/measure'
-import type { Design, SculptMode } from '../core/types'
+import type { Design, EnvironmentId, Gem, MetalId } from '../core/types'
 
 export interface SceneMetrics {
   measure: MeasureResult
-  sculpted: boolean
   triangles: number
   warnings: string[]
 }
@@ -28,6 +26,11 @@ export interface SceneCallbacks {
   onAutoQuality?: (avgFrameMs: number) => void
 }
 
+/** 카메라 프리셋 — 'right' 는 밴드 폭·단면이 정면으로 보이는 우측 뷰 */
+export type ViewPreset = 'front' | 'right'
+
+type ViewAnim = { from: THREE.Vector3; to: THREE.Vector3; start: number; dur: number } | null
+
 export class RingScene {
   private container: HTMLElement
   private renderer: THREE.WebGLRenderer
@@ -35,8 +38,6 @@ export class RingScene {
   private camera: THREE.PerspectiveCamera
   private controls: OrbitControls
   private ringGroup: THREE.Group
-  private raycaster = new THREE.Raycaster()
-  private pointer = new THREE.Vector2()
   private resizeObserver: ResizeObserver
   private callbacks: SceneCallbacks
   private pmrem: THREE.PMREMGenerator
@@ -53,19 +54,14 @@ export class RingScene {
   private metalParts: MeshPart[] = []
   private gemParts: MeshPart[] = []
   private stoneWarnings: string[] = []
-
-  private sculpt: SculptMesh | null = null
-  private sculptMode: SculptMode = 'off'
-  private brushRadiusMm = 2
-  private brushStrength = 0.45
-  private sculptUndo: Float32Array[] = []
+  private twist: TwistSpec | undefined = undefined
 
   private highQuality = true
   private perfSamples: number[] = []
   private perfChecked = false
   /** 화면에 다시 그려야 하는 상태인지 (렌더 온디맨드) */
   private needsRender = true
-  private dragging = false
+  private viewAnim: ViewAnim = null
   private lastMetrics: MeasureResult | null = null
   private disposed = false
   private rafId = 0
@@ -94,7 +90,7 @@ export class RingScene {
     this.scene = new THREE.Scene()
 
     const aspect = (container.clientWidth || 800) / (container.clientHeight || 600)
-    this.camera = new THREE.PerspectiveCamera(32, aspect, 1, 5000)
+    this.camera = new THREE.PerspectiveCamera(32, aspect, 0.6, 5000)
     this.camera.position.set(0, 9, 62)
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement)
@@ -136,35 +132,34 @@ export class RingScene {
       clearcoatRoughness: 0.18,
     })
     this.gemMaterial = new THREE.MeshPhysicalMaterial({
-      color: 0xf4f9ff,
+      color: GEMS[design.stone.gem].color,
       metalness: 0,
-      roughness: 0.03,
+      roughness: GEMS[design.stone.gem].roughness,
       transmission: 0,
       thickness: 2,
-      ior: 2.417,
+      ior: GEMS[design.stone.gem].ior,
       reflectivity: 1,
       specularIntensity: 1,
       envMapIntensity: 2.6,
       clearcoat: 1,
       clearcoatRoughness: 0.02,
-      flatShading: true,
       side: THREE.DoubleSide,
       transparent: true,
       opacity: 0.78,
       depthWrite: false,
     })
+    this.applyGem(design.stone.gem)
 
     this.applyEnvironment(design.environment)
     this.setHighQuality(this.highQuality)
-    this.rebuild()
+    this.rebuild({ refit: true, then: null })
 
     this.resizeObserver = new ResizeObserver(() => this.resize())
     this.resizeObserver.observe(container)
 
-    this.renderer.domElement.addEventListener('pointerdown', this.onPointerDown)
-    this.renderer.domElement.addEventListener('pointermove', this.onPointerMove)
-    this.renderer.domElement.addEventListener('pointerup', this.onPointerUp)
-    this.renderer.domElement.addEventListener('pointercancel', this.onPointerUp)
+    // 사용자가 직접 돌리거나 확대하면 자동 뷰 전환은 즉시 물러납니다.
+    this.renderer.domElement.addEventListener('pointerdown', this.cancelViewAnim)
+    this.renderer.domElement.addEventListener('wheel', this.cancelViewAnim, { passive: true })
 
     this.needsRender = true
     this.animate()
@@ -173,84 +168,63 @@ export class RingScene {
   /* ── 공개 API ─────────────────────────────────────────────── */
 
   updateDesign(design: Design): void {
+    const prev = this.design
+    const sizeChanged = design.band.sizeKR !== prev.band.sizeKR
+    const widthChanged = design.band.widthMm !== prev.band.widthMm
     const geometryChanged =
-      design.band.sizeKR !== this.design.band.sizeKR ||
-      design.band.widthMm !== this.design.band.widthMm ||
-      design.band.thicknessMm !== this.design.band.thicknessMm ||
-      design.band.profile !== this.design.band.profile ||
-      design.band.comfort !== this.design.band.comfort ||
-      JSON.stringify(design.stone) !== JSON.stringify(this.design.stone) ||
-      design.engraving.enabled !== this.design.engraving.enabled ||
-      design.engraving.text !== this.design.engraving.text ||
-      design.engraving.position !== this.design.engraving.position ||
-      design.engraving.heightMm !== this.design.engraving.heightMm
+      sizeChanged ||
+      widthChanged ||
+      design.band.thicknessMm !== prev.band.thicknessMm ||
+      design.band.profile !== prev.band.profile ||
+      design.band.comfort !== prev.band.comfort ||
+      stoneKey(design) !== stoneKey(prev) ||
+      design.engraving.enabled !== prev.engraving.enabled ||
+      design.engraving.text !== prev.engraving.text ||
+      design.engraving.position !== prev.engraving.position ||
+      design.engraving.heightMm !== prev.engraving.heightMm
 
-    const metalChanged = design.metal !== this.design.metal
-    const envChanged = design.environment !== this.design.environment
+    const gemChanged = design.stone.gem !== prev.stone.gem
+    const metalChanged = design.metal !== prev.metal
+    const envChanged = design.environment !== prev.environment
     this.design = design
 
-    if (geometryChanged) this.rebuild()
+    if (geometryChanged) {
+      // 밴드 폭을 조절하면 폭·단면이 바로 보이는 우측 뷰로 부드럽게 이동합니다.
+      this.rebuild({ refit: sizeChanged, then: widthChanged ? 'right' : null })
+    }
     if (metalChanged) this.applyMetal(design.metal)
+    if (gemChanged) this.applyGem(design.stone.gem)
     if (envChanged) this.applyEnvironment(design.environment)
+  }
+
+  /** 카메라를 지정한 프리셋으로 옮깁니다. */
+  applyView(preset: ViewPreset, animate = true): void {
+    const dist = this.fitDistance()
+    const to =
+      preset === 'right'
+        ? new THREE.Vector3(dist, dist * 0.24, 0)
+        : new THREE.Vector3(0, dist * 0.16, dist)
+    this.controls.target.set(0, 0, 0)
+    if (!animate) {
+      this.camera.position.copy(to)
+      this.controls.update()
+      this.needsRender = true
+      return
+    }
+    this.viewAnim = { from: this.camera.position.clone(), to, start: performance.now(), dur: 620 }
+    this.needsRender = true
   }
 
   /** 보석 투과광(transmission)은 GPU 비용이 큽니다. 저사양·소프트웨어 렌더러에서는 끕니다. */
   setHighQuality(on: boolean): void {
     this.highQuality = on
-    this.gemMaterial.transmission = on ? 0.9 : 0
-    this.gemMaterial.transparent = !on
-    this.gemMaterial.opacity = on ? 1 : 0.78
+    const gem = GEMS[this.design.stone.gem]
+    this.gemMaterial.transmission = on ? gem.transmission : 0
+    this.gemMaterial.transparent = true
+    this.gemMaterial.opacity = on ? 1 : 0.86
     this.gemMaterial.depthWrite = on
     this.gemMaterial.needsUpdate = true
     this.needsRender = true
-  }
-
-  setSculptMode(mode: SculptMode): void {
-    if (this.sculptMode === mode) return
-    this.sculptMode = mode
-    if (mode !== 'off') {
-      if (!this.sculpt && this.bandMesh) {
-        this.sculpt = buildSculptMesh(this.bandMesh.geometry)
-      }
-      this.controls.enabled = false
-    } else {
-      this.controls.enabled = true
-      if (this.sculpt) {
-        this.pushSculptUndo()
-        this.emitMetrics()
-      }
-    }
-  }
-
-  setBrush(radiusMm: number, strength: number): void {
-    this.brushRadiusMm = radiusMm
-    this.brushStrength = strength
-  }
-
-  undoSculpt(): boolean {
-    const prev = this.sculptUndo.pop()
-    if (!prev || !this.sculpt) return false
-    const attr = this.sculpt.geometry.getAttribute('position') as THREE.BufferAttribute
-    ;(attr.array as Float32Array).set(prev)
-    attr.needsUpdate = true
-    this.sculpt.geometry.computeVertexNormals()
-    this.sculpt.geometry.getAttribute('normal')!.needsUpdate = true
-    this.sculpt.geometry.computeBoundingSphere()
-    this.needsRender = true
-    this.emitMetrics()
-    return true
-  }
-
-  resetSculpted(): void {
-    if (!this.sculpt) return
-    this.pushSculptUndo()
-    resetSculpt(this.sculpt)
-    this.needsRender = true
-    this.emitMetrics()
-  }
-
-  isSculpted(): boolean {
-    return !!this.sculpt && this.sculpt.strokes > 0
   }
 
   exportSTL(includeGems: boolean): { blob: Blob; name: string; triangles: number } {
@@ -279,10 +253,8 @@ export class RingScene {
     this.disposed = true
     cancelAnimationFrame(this.rafId)
     this.resizeObserver.disconnect()
-    this.renderer.domElement.removeEventListener('pointerdown', this.onPointerDown)
-    this.renderer.domElement.removeEventListener('pointermove', this.onPointerMove)
-    this.renderer.domElement.removeEventListener('pointerup', this.onPointerUp)
-    this.renderer.domElement.removeEventListener('pointercancel', this.onPointerUp)
+    this.renderer.domElement.removeEventListener('pointerdown', this.cancelViewAnim)
+    this.renderer.domElement.removeEventListener('wheel', this.cancelViewAnim)
     this.controls.dispose()
     this.clearModel()
     this.pmrem.dispose()
@@ -301,22 +273,35 @@ export class RingScene {
     return size.x / Math.max(1, size.y)
   }
 
-  private rebuild(): void {
+  /** 반지가 화면에 꽉 차는 카메라 거리 */
+  private fitDistance(): number {
+    const outer = this.band?.outerRadiusMm ?? 11
+    const radius = Math.max(6, outer * 1.12)
+    const fov = THREE.MathUtils.degToRad(this.camera.fov)
+    const aspect = this.currentAspect()
+    const hFov = 2 * Math.atan(Math.tan(fov / 2) * aspect)
+    return (radius / Math.sin(Math.min(fov, hFov) / 2)) * 1.08
+  }
+
+  private rebuild(opts: { refit: boolean; then: ViewPreset | null }): void {
+    const first = !this.band
     this.clearModel()
-    this.sculpt = null
-    this.sculptUndo = []
 
     const band = buildRing(this.design.band)
     this.band = band
+    const profile = buildProfile(this.design.band)
+    this.twist = profile.twist
 
-    const bandGeo = band.geometry
-    const bandMesh = new THREE.Mesh(bandGeo, this.bandMaterial)
+    const bandMesh = new THREE.Mesh(band.geometry, this.bandMaterial)
     bandMesh.name = 'band'
     this.bandMesh = bandMesh
     this.ringGroup.add(bandMesh)
 
     // 스톤 & 세팅
-    const stones = buildStones(this.design.stone, { outerRadiusMm: band.outerRadiusMm })
+    const stones = buildStones(this.design.stone, {
+      outerRadiusMm: band.outerRadiusMm,
+      profileRadial: band.profileMaxRadial,
+    })
     this.gemParts = stones.gems
     this.metalParts = stones.metals
     this.stoneWarnings = stones.warnings
@@ -340,12 +325,12 @@ export class RingScene {
 
     // 각인
     if (this.design.engraving.enabled) {
-      const profile = buildProfile(this.design.band).points
       const engrave = buildEngraving(this.design.engraving, {
-        profile,
+        profile: profile.points,
         innerRadiusMm: band.innerRadiusMm,
         widthMm: this.design.band.widthMm,
         metalColor: METALS[this.design.metal].color,
+        twist: this.twist,
       })
       if (engrave) {
         const mat = makeEngravingMaterial(engrave, METALS[this.design.metal].color)
@@ -356,7 +341,13 @@ export class RingScene {
       }
     }
 
-    this.fitCamera()
+    if (first || opts.refit) {
+      this.fitCamera()
+    } else {
+      this.updateClip()
+    }
+    if (first) this.applyView('front', false)
+    if (opts.then) this.applyView(opts.then, true)
     this.emitMetrics()
   }
 
@@ -383,7 +374,7 @@ export class RingScene {
     this.stoneWarnings = []
   }
 
-  private applyMetal(metalId: Design['metal']): void {
+  private applyMetal(metalId: MetalId): void {
     const metal = METALS[metalId]
     this.bandMaterial.color.setHex(metal.color)
     this.bandMaterial.roughness = metal.roughness
@@ -391,12 +382,25 @@ export class RingScene {
     this.needsRender = true
     if (this.engravingMesh) {
       const mat = this.engravingMesh.material as THREE.MeshStandardMaterial
-      mat.color.setHex(metal.color).multiplyScalar(0.55)
+      mat.color.setHex(metal.color).multiplyScalar(0.4)
       mat.needsUpdate = true
     }
   }
 
-  private applyEnvironment(id: Design['environment']): void {
+  private applyGem(gemId: Design['stone']['gem']): void {
+    const gem: Gem = GEMS[gemId]
+    this.gemMaterial.color.setHex(gem.color)
+    this.gemMaterial.ior = gem.ior
+    this.gemMaterial.roughness = gem.roughness
+    this.gemMaterial.envMapIntensity = gem.envIntensity
+    this.gemMaterial.attenuationColor = new THREE.Color(gem.color).lerp(new THREE.Color(0xffffff), 0.35)
+    this.gemMaterial.attenuationDistance = 1.4
+    this.gemMaterial.transmission = this.highQuality ? gem.transmission : 0
+    this.gemMaterial.needsUpdate = true
+    this.needsRender = true
+  }
+
+  private applyEnvironment(id: EnvironmentId): void {
     const preset = {
       studio: { intensity: 1.15, exposure: 1.05 },
       softbox: { intensity: 1.55, exposure: 1.15 },
@@ -409,28 +413,49 @@ export class RingScene {
     this.needsRender = true
   }
 
+  private updateClip(): void {
+    const radius = Math.max(6, (this.band?.outerRadiusMm ?? 11) * 1.12)
+    // 깊이 정밀도가 확보되도록 near 를 너무 작게 두지 않습니다(각인 패치 z-파이팅 방지).
+    this.camera.near = Math.max(0.8, radius * 0.09)
+    this.camera.far = radius * 90
+    this.camera.aspect = this.currentAspect()
+    this.camera.updateProjectionMatrix()
+    this.controls.minDistance = radius * 1.15
+    this.controls.maxDistance = radius * 9
+  }
+
   private fitCamera(): void {
     if (!this.band) return
-    const radius = Math.max(6, this.band.outerRadiusMm * 1.12)
-    const fov = THREE.MathUtils.degToRad(this.camera.fov)
-    const aspect = this.currentAspect()
-    const hFov = 2 * Math.atan(Math.tan(fov / 2) * aspect)
-    const dist = (radius / Math.sin(Math.min(fov, hFov) / 2)) * 1.08
+    const dist = this.fitDistance()
+    this.updateClip()
     this.camera.position.set(0, dist * 0.16, dist)
-    this.camera.near = Math.max(0.5, dist * 0.02)
-    this.camera.far = dist * 12
-    this.camera.aspect = aspect
-    this.camera.updateProjectionMatrix()
+    this.camera.lookAt(0, 0, 0)
     this.controls.target.set(0, 0, 0)
-    this.controls.minDistance = radius * 1.2
-    this.controls.maxDistance = radius * 12
     this.controls.update()
     this.needsRender = true
   }
 
-  private frameCamera(aspect: number): void {
-    this.camera.aspect = aspect
-    this.camera.updateProjectionMatrix()
+  private cancelViewAnim = (): void => {
+    if (this.viewAnim) {
+      this.viewAnim = null
+      this.needsRender = true
+    }
+  }
+
+  private stepViewAnim(now: number): void {
+    const anim = this.viewAnim
+    if (!anim) return
+    const t = Math.min(1, (now - anim.start) / anim.dur)
+    const e = 1 - Math.pow(1 - t, 3) // ease-out
+    this.camera.position.copy(anim.from).lerp(anim.to, e)
+    this.camera.lookAt(0, 0, 0)
+    this.controls.target.set(0, 0, 0)
+    this.needsRender = true
+    if (t >= 1) {
+      this.viewAnim = null
+      // 오빗 컨트롤 내부 상태를 지금 카메라 위치와 맞춥니다.
+      this.controls.update()
+    }
   }
 
   private resize(): void {
@@ -438,8 +463,9 @@ export class RingScene {
     const w = this.container.clientWidth || 1
     const h = this.container.clientHeight || 1
     this.renderer.setSize(w, h, false)
+    this.camera.aspect = w / Math.max(1, h)
+    this.camera.updateProjectionMatrix()
     this.needsRender = true
-    this.frameCamera(w / Math.max(1, h))
   }
 
   private emitMetrics(): void {
@@ -452,71 +478,9 @@ export class RingScene {
     this.lastMetrics = result
     this.callbacks.onMetrics?.({
       measure: result,
-      sculpted: this.isSculpted(),
       triangles: result.totalTriangles,
       warnings: this.stoneWarnings,
     })
-  }
-
-  private pushSculptUndo(): void {
-    if (!this.sculpt) return
-    if (this.sculpt.strokes === 0) return
-    const attr = this.sculpt.geometry.getAttribute('position') as THREE.BufferAttribute
-    this.sculptUndo.push(new Float32Array(attr.array as Float32Array))
-    if (this.sculptUndo.length > 20) this.sculptUndo.shift()
-  }
-
-  private onPointerDown = (ev: PointerEvent): void => {
-    if (this.sculptMode === 'off' || !this.bandMesh) return
-    const hit = this.pick(ev)
-    if (!hit) return
-    ev.preventDefault()
-    this.renderer.domElement.setPointerCapture(ev.pointerId)
-    this.dragging = true
-    this.pushSculptUndo()
-    this.strokeAt(hit.point)
-  }
-
-  private onPointerMove = (ev: PointerEvent): void => {
-    if (!this.dragging || this.sculptMode === 'off') return
-    const hit = this.pick(ev)
-    if (!hit) return
-    ev.preventDefault()
-    this.strokeAt(hit.point)
-  }
-
-  private onPointerUp = (ev: PointerEvent): void => {
-    if (!this.dragging) return
-    this.dragging = false
-    try {
-      this.renderer.domElement.releasePointerCapture(ev.pointerId)
-    } catch {
-      /* noop */
-    }
-    this.emitMetrics()
-  }
-
-  private strokeAt(worldPoint: THREE.Vector3): void {
-    if (!this.sculpt || !this.bandMesh) return
-    const local = this.bandMesh.worldToLocal(worldPoint.clone())
-    applyBrush(this.sculpt, {
-      point: local,
-      radiusMm: this.brushRadiusMm,
-      strength: this.brushStrength,
-      mode: this.sculptMode === 'smooth' ? 'smooth' : this.sculptMode === 'pull' ? 'pull' : 'push',
-    })
-    this.needsRender = true
-  }
-
-  private pick(ev: PointerEvent): { point: THREE.Vector3 } | null {
-    if (!this.bandMesh) return null
-    const rect = this.renderer.domElement.getBoundingClientRect()
-    this.pointer.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1
-    this.pointer.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1
-    this.raycaster.setFromCamera(this.pointer, this.camera)
-    const hits = this.raycaster.intersectObject(this.bandMesh, false)
-    if (hits.length === 0) return null
-    return { point: hits[0].point.clone() }
   }
 
   private renderOnce(): void {
@@ -527,13 +491,18 @@ export class RingScene {
   }
 
   private animate = (): void => {
-    if (this.disposed) {
-      return
-    }
+    if (this.disposed) return
     this.rafId = requestAnimationFrame(this.animate)
 
-    // 렌더 온디맨드: 카메라(오빗·관성)·씬·조형이 바뀔 때만 그립니다.
-    const moved = this.controls.update()
+    let moved = false
+    if (this.viewAnim) {
+      // 자동 뷰 전환 중에는 오빗 컨트롤 관성과 싸우지 않도록 update() 를 건너뜁니다.
+      this.stepViewAnim(performance.now())
+    } else {
+      moved = this.controls.update()
+    }
+
+    // 렌더 온디맨드: 카메라(오빗·관성)·씬이 바뀔 때만 그립니다.
     if (moved || this.needsRender) {
       this.needsRender = false
       const t0 = performance.now()
@@ -559,4 +528,10 @@ export class RingScene {
   private markDirty = (): void => {
     this.needsRender = true
   }
+}
+
+/** 스톤 기하에 영향을 주는 값만 뽑은 키(보석 색은 재질만 바꿉니다) */
+function stoneKey(d: Design): string {
+  const s = d.stone
+  return [s.shape, s.setting, s.count, s.sizeMm, s.prongMm, s.rotationDeg].join('|')
 }

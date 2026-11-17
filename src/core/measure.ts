@@ -165,7 +165,6 @@ export function parametricChecks(args: {
   stoneCount: number
   engravingOn: boolean
   engravingHeightMm: number
-  sculpted: boolean
   measure: MeasureResult | null
 }): DesignCheck[] {
   const out: DesignCheck[] = []
@@ -182,7 +181,7 @@ export function parametricChecks(args: {
       out.push({
         level: 'fail',
         title: '메쉬에 구멍이 있습니다',
-        detail: `열린 엣지 ${m.openEdges}개 · 비다양체 엣지 ${m.nonManifoldEdges}개. 조형을 되돌리거나 자동 수선이 필요합니다.`,
+        detail: `열린 엣지 ${m.openEdges}개 · 비다양체 엣지 ${m.nonManifoldEdges}개. 세팅 두께나 스톤 크기를 조정해 주세요.`,
       })
     }
   }
@@ -214,14 +213,6 @@ export function parametricChecks(args: {
       level: 'warn',
       title: '각인 글자가 밴드 폭을 넘습니다',
       detail: `문자 높이 ${args.engravingHeightMm.toFixed(1)}mm 는 폭 ${args.widthMm.toFixed(1)}mm 밴드에 비해 큽니다. 0.8~2.5mm 범위에서 줄여 주세요.`,
-    })
-  }
-
-  if (args.sculpted) {
-    out.push({
-      level: 'warn',
-      title: '자유 조형이 적용된 메쉬입니다',
-      detail: '조형 중에는 파라메트릭 검증이 아니라 실제 메쉬 기준으로 검사합니다. 파라미터를 바꾸면 조형이 초기화됩니다.',
     })
   }
 

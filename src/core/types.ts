@@ -6,14 +6,16 @@
  * 단위는 항상 mm / g 입니다.
  */
 
-export type ProfileId = 'dome' | 'flat' | 'bevel'
+export type ProfileId = 'dome' | 'flat' | 'bevel' | 'twist'
 export type ComfortFit = 'off' | 'soft' | 'strong'
-export type StoneShape = 'round' | 'oval'
-export type SettingType = 'prong4' | 'prong6' | 'bezel'
+export type StoneShape = 'round' | 'oval' | 'pear' | 'marquise' | 'emerald' | 'cabochon'
+export type SettingType = 'prong4' | 'prong6' | 'bezel' | 'halo' | 'channel'
+export type GemId = 'diamond' | 'ruby' | 'sapphire' | 'citrine' | 'topaz'
 export type MetalId = 'gold18k' | 'gold14k' | 'rose18k' | 'white18k' | 'silver925' | 'pt950'
 export type EnvironmentId = 'studio' | 'softbox' | 'dark'
 export type EngravePosition = 'inner' | 'outer'
-export type SculptMode = 'off' | 'push' | 'pull' | 'smooth'
+/** 보석 커팅 방식 — 모양에서 결정됩니다 */
+export type StoneCut = 'brilliant' | 'step' | 'cabochon'
 
 export interface BandParams {
   /** KS(한국) 호수 1~30 */
@@ -33,12 +35,14 @@ export interface StoneParams {
   setting: SettingType
   /** 스톤 개수 1~9 */
   count: number
-  /** 스톤 지름(라운드) / 단축 지름(오벌) mm */
+  /** 스톤 지름(짧은 축) mm */
   sizeMm: number
   /** 프롱 지름 mm */
   prongMm: number
   /** 배치 회전 오프셋(도) */
   rotationDeg: number
+  /** 보석 재질(색) */
+  gem: GemId
 }
 
 export interface EngravingParams {
@@ -70,6 +74,21 @@ export interface Metal {
   shrink: number
 }
 
+export interface Gem {
+  id: GemId
+  name: string
+  short: string
+  /** 기준색 */
+  color: number
+  /** 굴절률(IOR) */
+  ior: number
+  roughness: number
+  /** 환경 반사 강도 */
+  envIntensity: number
+  /** 투과(transmission) 세기 */
+  transmission: number
+}
+
 export const DEFAULT_DESIGN: Design = {
   band: {
     sizeKR: 12,
@@ -85,6 +104,7 @@ export const DEFAULT_DESIGN: Design = {
     sizeMm: 4,
     prongMm: 0.9,
     rotationDeg: 0,
+    gem: 'diamond',
   },
   engraving: {
     enabled: false,

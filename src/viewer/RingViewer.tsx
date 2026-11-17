@@ -1,37 +1,25 @@
 import { useEffect, useRef } from 'react'
 import type { MutableRefObject } from 'react'
-import { RingScene, type SceneMetrics } from './RingScene'
+import { RingScene, type SceneMetrics, type ViewPreset } from './RingScene'
 import { useStore } from '../store'
-import type { Design, SculptMode } from '../core/types'
+import type { Design } from '../core/types'
 import { downloadBlob } from '../utils/download'
 
 export interface ViewerApi {
   exportSTL: (includeGems: boolean) => void
+  /** 카메라 뷰 프리셋 (밴드 폭 조절 시 'right' 로 자동 이동) */
+  setView: (preset: ViewPreset) => void
 }
 
 interface Props {
   design: Design
-  sculptMode: SculptMode
-  brushRadius: number
-  brushStrength: number
   highQuality: boolean
   onMetrics: (m: SceneMetrics) => void
   onNotice: (text: string, kind?: 'info' | 'warn' | 'error' | 'ok') => void
   apiRef: MutableRefObject<ViewerApi | null>
-  sculptAction: { type: 'undo' | 'reset'; seq: number } | null
 }
 
-export function RingViewer({
-  design,
-  sculptMode,
-  brushRadius,
-  brushStrength,
-  highQuality,
-  onMetrics,
-  onNotice,
-  apiRef,
-  sculptAction,
-}: Props): JSX.Element {
+export function RingViewer({ design, highQuality, onMetrics, onNotice, apiRef }: Props): JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
   const sceneRef = useRef<RingScene | null>(null)
   const initialDesign = useRef(design)
@@ -64,6 +52,7 @@ export function RingViewer({
             noticeCb.current(err instanceof Error ? err.message : 'STL 내보내기에 실패했습니다.', 'error')
           }
         },
+        setView: (preset: ViewPreset) => sceneRef.current?.applyView(preset, true),
       }
     } catch (err) {
       noticeCb.current(
@@ -86,28 +75,8 @@ export function RingViewer({
   }, [design])
 
   useEffect(() => {
-    sceneRef.current?.setSculptMode(sculptMode)
-  }, [sculptMode])
-
-  useEffect(() => {
-    sceneRef.current?.setBrush(brushRadius, brushStrength)
-  }, [brushRadius, brushStrength])
-
-  useEffect(() => {
     sceneRef.current?.setHighQuality(highQuality)
   }, [highQuality])
 
-  useEffect(() => {
-    if (!sculptAction) return
-    if (sculptAction.type === 'undo') sceneRef.current?.undoSculpt()
-    else sceneRef.current?.resetSculpted()
-  }, [sculptAction])
-
-  return (
-    <div
-      ref={hostRef}
-      className={`viewport${sculptMode !== 'off' ? ' is-sculpting' : ''}`}
-      aria-label="3D 반지 뷰포트"
-    />
-  )
+  return <div ref={hostRef} className="viewport" aria-label="3D 반지 뷰포트" />
 }

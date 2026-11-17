@@ -1,7 +1,15 @@
 import { create } from 'zustand'
-import { DEFAULT_DESIGN, type BandParams, type Design, type EngravingParams, type EnvironmentId, type MetalId, type SculptMode, type StoneParams } from './core/types'
+import {
+  DEFAULT_DESIGN,
+  type BandParams,
+  type Design,
+  type EngravingParams,
+  type EnvironmentId,
+  type MetalId,
+  type StoneParams,
+} from './core/types'
 
-export type TabId = 'band' | 'stone' | 'sculpt' | 'engrave' | 'material' | 'export'
+export type TabId = 'band' | 'stone' | 'engrave' | 'material' | 'export'
 export type ToastKind = 'info' | 'warn' | 'error' | 'ok'
 export interface Toast {
   id: number
@@ -49,14 +57,10 @@ function scheduleSave(design: Design): void {
 interface State {
   design: Design
   tab: TabId
-  sculptMode: SculptMode
-  brushRadiusMm: number
-  brushStrength: number
   highQuality: boolean
   toast: Toast | null
   undoStack: Design[]
   redoStack: Design[]
-  sculptAction: { type: 'undo' | 'reset'; seq: number } | null
 
   setTab: (tab: TabId) => void
   patchBand: (patch: Partial<BandParams>, key?: string) => void
@@ -64,13 +68,10 @@ interface State {
   patchEngraving: (patch: Partial<EngravingParams>, key?: string) => void
   setMetal: (metal: MetalId) => void
   setEnvironment: (env: EnvironmentId) => void
-  setSculptMode: (mode: SculptMode) => void
   setHighQuality: (on: boolean) => void
-  setBrush: (patch: { radiusMm?: number; strength?: number }) => void
   undo: () => void
   redo: () => void
   resetDesign: () => void
-  requestSculptAction: (type: 'undo' | 'reset') => void
   showToast: (text: string, kind?: ToastKind) => void
   dismissToast: (id: number) => void
 }
@@ -100,17 +101,12 @@ export const useStore = create<State>()((set, get) => {
   return {
     design: initialDesign,
     tab: 'band',
-    sculptMode: 'off',
-    brushRadiusMm: 2.2,
-    brushStrength: 0.5,
     highQuality: true,
     toast: null,
     undoStack: [],
     redoStack: [],
-    sculptAction: null,
 
-    /** 조형 탭을 벗어나면 브러시 입력도 함께 끕니다(다른 탭에서 실수로 표면이 깎이지 않도록). */
-    setTab: (tab) => set((s) => (tab === 'sculpt' || s.sculptMode === 'off' ? { tab } : { tab, sculptMode: 'off' })),
+    setTab: (tab) => set({ tab }),
 
     patchBand: (patch, key = 'band:' + Object.keys(patch).join(',')) => {
       const s = get()
@@ -127,13 +123,7 @@ export const useStore = create<State>()((set, get) => {
     setMetal: (metal) => commit({ ...get().design, metal }, 'metal'),
     setEnvironment: (environment) => commit({ ...get().design, environment }, 'environment'),
 
-    setSculptMode: (mode) => set({ sculptMode: mode }),
     setHighQuality: (on) => set({ highQuality: on }),
-    setBrush: (patch) =>
-      set((s) => ({
-        brushRadiusMm: patch.radiusMm ?? s.brushRadiusMm,
-        brushStrength: patch.strength ?? s.brushStrength,
-      })),
 
     undo: () => {
       const s = get()
@@ -164,9 +154,6 @@ export const useStore = create<State>()((set, get) => {
       set({ design: DEFAULT_DESIGN, undoStack: [...s.undoStack, s.design], redoStack: [] })
       scheduleSave(DEFAULT_DESIGN)
     },
-
-    requestSculptAction: (type) =>
-      set((s) => ({ sculptAction: { type, seq: (s.sculptAction?.seq ?? 0) + 1 } })),
 
     showToast: (text, kind = 'info') => {
       const id = ++toastSeq

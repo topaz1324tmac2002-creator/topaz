@@ -25,7 +25,6 @@ export function ExportPanel({ metrics, onExportSTL }: Props): JSX.Element {
     stoneCount: design.stone.count,
     engravingOn: design.engraving.enabled,
     engravingHeightMm: design.engraving.heightMm,
-    sculpted: metrics?.sculpted ?? false,
     measure: metrics?.measure ?? null,
   })
   const blocked = checks.some((c) => c.level === 'fail')

@@ -13,7 +13,7 @@ export function EngravePanel(): JSX.Element {
         <Toggle
           label="각인 사용"
           checked={engraving.enabled}
-          hint="안쪽(스톤 반대편)에 새깁니다. 미리보기는 음각 노멀맵으로 표현되며, 실물 각인 형상은 V1.1에서 차집합으로 생성합니다."
+          hint="스톤 반대편(6시 방향)에 새깁니다. 미리보기는 표면에서 0.06mm 띄운 음각 패치로 그려 확대·축소 어디서나 보입니다. 실물 각인 형상은 V1.1에서 차집합으로 생성합니다."
           onChange={(v) => patch({ enabled: v }, 'engrave:enabled')}
         />
         <div className="field">
@@ -54,7 +54,7 @@ export function EngravePanel(): JSX.Element {
       </Section>
       <Section title="안내">
         <ul className="bullets">
-          <li>각인은 밴드 곡면을 따라 휘어지도록 투영됩니다.</li>
+          <li>각인은 밴드 곡면을 따라 휘어지도록 투영되며, 안쪽·바깥 모두 표면에 정확히 붙습니다.</li>
           <li>안쪽 각인은 반지 구멍을 통해 보입니다. 뷰포트를 돌려 확인하세요.</li>
           <li>주물 후 각인 깊이는 0.15~0.5mm가 안전합니다.</li>
         </ul>

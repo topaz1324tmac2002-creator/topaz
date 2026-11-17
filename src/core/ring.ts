@@ -85,10 +85,39 @@ export function comfortRadius(comfort: ComfortFit, widthMm: number, thicknessMm:
 export interface ProfileResult {
   /** 닫힌 루프(중복점 없음) [반경방향, 축방향] mm */
   points: Vec2[]
-  /** 바깥면 최대 반경 오프셋 mm */
+  /** 바깥면 최대 반경 오프셋 mm (트위스트 리브 높이 포함) */
   maxRadial: number
   /** 단면적 mm² */
   area: number
+  /** 트위스트(나선 리브) 변조 정보 — 없으면 일반 단면 */
+  twist?: TwistSpec
+}
+
+export interface TwistSpec {
+  /** 원주 방향 리브 수 (정수 — 이음매가 이어지도록) */
+  ribs: number
+  /** 리브 높이 mm */
+  amp: number
+  /** 폭 방향 기울기 (라디안/mm) */
+  tilt: number
+  /** 변조 기준 최대 반경 오프셋 */
+  baseRadial: number
+}
+
+/** 트위스트 단면 파라미터 — 시각·용량 계산이 같은 값을 쓰도록 한 곳에 둡니다. */
+export function twistSpec(band: BandParams, baseRadial: number): TwistSpec {
+  const amp = Math.min(0.45, Math.max(0.18, band.thicknessMm * 0.24))
+  return { ribs: 7, amp, tilt: Math.PI / Math.max(0.5, band.widthMm / 2), baseRadial }
+}
+
+/** 트위스트 리브 높이 변조 — 반경방향 오프셋 rOff, 축방향 a, 각도 theta */
+export function twistOffset(twist: TwistSpec, theta: number, rOff: number, axial: number): { dr: number; da: number } {
+  // 안쪽 12% 는 손대지 않아 내경(호수)이 정확히 유지됩니다.
+  const r0 = Math.max(0.001, twist.baseRadial)
+  const inner = r0 * 0.12
+  const w = Math.pow(Math.max(0, Math.min(1, (rOff - inner) / (r0 - inner))), 0.8)
+  const phase = twist.ribs * theta + twist.tilt * axial
+  return { dr: twist.amp * w * Math.cos(phase), da: twist.amp * 0.3 * w * Math.sin(phase) }
 }
 
 /** 밴드 파라미터 → 단면 프로파일 2D 루프 */
@@ -122,7 +151,7 @@ export function buildProfile(band: BandParams): ProfileResult {
     ]
     radii = [cf, rc, rc, rc, rc, cf]
   } else {
-    // dome: 바깥면이 볼록한 기본형.
+    // dome: 바깥면이 볼록한 기본형. (트위스트도 이 단면을 기본으로 씁니다)
     // "두께"는 최대 두께(중앙)로 해석하고, 가장자리로 갈수록 얇아집니다(실무 관행).
     const edge = Math.max(0.35, t * 0.55)
     const domeH = Math.min(t - edge, hw * 0.9)
@@ -142,8 +171,11 @@ export function buildProfile(band: BandParams): ProfileResult {
   }
 
   const rounded = roundPolygon(points, radii, 4)
-  const maxRadial = rounded.reduce((m, p) => Math.max(m, p[0]), 0)
-  return { points: rounded, maxRadial, area: polygonArea(rounded) }
+  const baseRadial = rounded.reduce((m, p) => Math.max(m, p[0]), 0)
+  // 트위스트는 돔 단면을 기본으로 하고, 지오메트리 단계에서 나선 리브를 얹습니다.
+  const twist = band.profile === 'twist' ? twistSpec(band, baseRadial) : undefined
+  const maxRadial = twist ? baseRadial + twist.amp : baseRadial
+  return { points: rounded, maxRadial, area: polygonArea(rounded), twist }
 }
 
 export function polygonArea(points: Vec2[]): number {
@@ -160,7 +192,12 @@ export function polygonArea(points: Vec2[]): number {
  * 단면 프로파일을 Z축(반지 축) 둘레로 회전시켜 닫힌 튜브 메쉬를 만듭니다.
  * 정점 수 = segments × profile.length, 인덱스는 시임(seam)까지 공유합니다.
  */
-export function buildTubeGeometry(profile: Vec2[], innerRadius: number, segments: number): THREE.BufferGeometry {
+export function buildTubeGeometry(
+  profile: Vec2[],
+  innerRadius: number,
+  segments: number,
+  twist?: TwistSpec,
+): THREE.BufferGeometry {
   const P = profile.length
   const S = Math.max(8, Math.round(segments))
   const count = S * P
@@ -179,8 +216,15 @@ export function buildTubeGeometry(profile: Vec2[], innerRadius: number, segments
     const sin = Math.sin(theta)
     const cos = Math.cos(theta)
     for (let j = 0; j < P; j++) {
-      const r = innerRadius + profile[j][0]
-      const a = profile[j][1]
+      const rOff = profile[j][0]
+      let a = profile[j][1]
+      let r = innerRadius + rOff
+      if (twist) {
+        // 바깥면으로 갈수록 강해지는 나선 리브 — 안쪽(손가락 면)은 그대로 원통입니다.
+        const mod = twistOffset(twist, theta, rOff, profile[j][1])
+        r += mod.dr
+        a += mod.da
+      }
       const k = (i * P + j) * 3
       positions[k] = r * sin
       positions[k + 1] = r * cos
@@ -304,10 +348,10 @@ export function buildRing(band: BandParams): RingBuild {
   const innerDiameterMm = ksToInnerDiameter(band.sizeKR)
   const innerRadiusMm = innerDiameterMm / 2
   const profile = buildProfile(band)
-  // 원주 방향 정밀도: 약 0.32mm 간격 (조형 브러시가 먹을 수 있는 밀도 확보)
+  // 원주 방향 정밀도: 약 0.34mm 간격 (트위스트 리브가 부드럽게 표현될 밀도)
   const circumference = 2 * Math.PI * innerRadiusMm
-  const segments = Math.min(420, Math.max(96, Math.round(circumference / 0.32)))
-  const geometry = buildTubeGeometry(profile.points, innerRadiusMm, segments)
+  const segments = Math.min(520, Math.max(96, Math.round(circumference / 0.34)))
+  const geometry = buildTubeGeometry(profile.points, innerRadiusMm, segments, profile.twist)
   return {
     geometry,
     innerDiameterMm,

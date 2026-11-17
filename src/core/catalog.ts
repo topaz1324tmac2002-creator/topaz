@@ -1,14 +1,17 @@
 /**
- * 카탈로그 — 금속·프로파일·호수 환산.
+ * 카탈로그 — 금속·보석·프로파일·스톤 모양·세팅·호수 환산.
  * 실제 현장 값(비중·수축률·프롱 두께)을 코드 수정 없이 바꿀 수 있도록 데이터로 분리했습니다.
  */
 import type {
   ComfortFit,
   EnvironmentId,
+  Gem,
+  GemId,
   Metal,
   MetalId,
   ProfileId,
   SettingType,
+  StoneCut,
   StoneShape,
 } from './types'
 
@@ -23,10 +26,22 @@ export const METALS: Record<MetalId, Metal> = {
 
 export const METAL_ORDER: MetalId[] = ['gold18k', 'gold14k', 'rose18k', 'white18k', 'silver925', 'pt950']
 
+/** 보석 재질 — 색·굴절률·투과 세기를 실제 보석 값에 맞춰 둡니다. */
+export const GEMS: Record<GemId, Gem> = {
+  diamond: { id: 'diamond', name: '다이아몬드', short: 'DIA', color: 0xf4f9ff, ior: 2.417, roughness: 0.03, envIntensity: 2.6, transmission: 0.9 },
+  ruby: { id: 'ruby', name: '루비', short: 'RUBY', color: 0xb00d24, ior: 1.77, roughness: 0.05, envIntensity: 2.2, transmission: 0.72 },
+  sapphire: { id: 'sapphire', name: '사파이어', short: 'SAP', color: 0x123a96, ior: 1.77, roughness: 0.05, envIntensity: 2.2, transmission: 0.72 },
+  citrine: { id: 'citrine', name: '시트린', short: 'CIT', color: 0xe0900f, ior: 1.55, roughness: 0.06, envIntensity: 2.1, transmission: 0.7 },
+  topaz: { id: 'topaz', name: '토파즈 (스위스 블루)', short: 'TPZ', color: 0x3fa9dd, ior: 1.62, roughness: 0.04, envIntensity: 2.3, transmission: 0.78 },
+}
+
+export const GEM_ORDER: GemId[] = ['diamond', 'ruby', 'sapphire', 'citrine', 'topaz']
+
 export const PROFILES: { id: ProfileId; label: string; hint: string }[] = [
   { id: 'dome', label: '돔', hint: '바깥면이 볼록한 기본형. 가장 흔한 결혼반지 단면' },
   { id: 'flat', label: '평면', hint: '각진 모서리의 클래식한 플랫 밴드' },
   { id: 'bevel', label: '각진', hint: '바깥 모서리를 깎은 베벨(나이프) 단면' },
+  { id: 'twist', label: '트위스트', hint: '바깥면이 나선으로 꼬인 로프형 밴드. 안쪽은 매끈한 원통으로 유지됩니다' },
 ]
 
 export const COMFORT: { id: ComfortFit; label: string; k: number }[] = [
@@ -35,16 +50,30 @@ export const COMFORT: { id: ComfortFit; label: string; k: number }[] = [
   { id: 'strong', label: '강', k: 1 },
 ]
 
-export const STONE_SHAPES: { id: StoneShape; label: string }[] = [
-  { id: 'round', label: '라운드' },
-  { id: 'oval', label: '오벌' },
+export const STONE_SHAPES: { id: StoneShape; label: string; cut: StoneCut; aspect: number; hint: string }[] = [
+  { id: 'round', label: '라운드', cut: 'brilliant', aspect: 1, hint: '브릴리언트 컷 — 58면 상당의 원형 팩팅' },
+  { id: 'oval', label: '오벌', cut: 'brilliant', aspect: 1.4, hint: '브릴리언트 컷 타원형 (긴 축 1.4배)' },
+  { id: 'pear', label: '페어', cut: 'brilliant', aspect: 1.5, hint: '브릴리언트 컷 물방울형 (긴 축 1.5배)' },
+  { id: 'marquise', label: '마퀴즈', cut: 'brilliant', aspect: 1.9, hint: '브릴리언트 컷 보트형 — 양 끝이 뾰족합니다' },
+  { id: 'emerald', label: '에메랄드컷', cut: 'step', aspect: 1.3, hint: '스텝 컷 — 모서리를 깎은 직사각형, 계단형 면' },
+  { id: 'cabochon', label: '캐보션', cut: 'cabochon', aspect: 1.15, hint: '패싯 없이 매끈하게 연마한 볼록 돔' },
 ]
 
-export const SETTINGS: { id: SettingType; label: string }[] = [
-  { id: 'prong4', label: '프롱 4' },
-  { id: 'prong6', label: '프롱 6' },
-  { id: 'bezel', label: '베젤' },
+export function stoneShape(id: StoneShape): (typeof STONE_SHAPES)[number] {
+  return STONE_SHAPES.find((s) => s.id === id) ?? STONE_SHAPES[0]
+}
+
+export const SETTINGS: { id: SettingType; label: string; hint: string }[] = [
+  { id: 'prong4', label: '프롱 4', hint: '프롱: 금속 다리 4개로 스톤을 잡습니다. 빛이 잘 들어가 반짝임이 좋습니다.' },
+  { id: 'prong6', label: '프롱 6', hint: '프롱: 다리 6개. 큰 스톤을 더 단단히 잡습니다.' },
+  { id: 'bezel', label: '베젤', hint: '베젤: 스톤 둘레를 금속 테로 감쌉니다. 프롱보다 안전하지만 스톤이 작아 보입니다.' },
+  { id: 'halo', label: '헤일로', hint: '헤일로: 센터 스톤 둘레를 같은 윤곽의 작은 메레 스톤이 감쌉니다. 스톤이 크게 보입니다.' },
+  { id: 'channel', label: '채널', hint: '채널: 두 개의 금속 벽 사이에 작은 스톤을 나란히 물려 넣습니다(숄더 장식).' },
 ]
+
+export function settingLabel(id: SettingType): string {
+  return SETTINGS.find((s) => s.id === id)?.label ?? id
+}
 
 export const ENVIRONMENTS: { id: EnvironmentId; label: string; hint: string }[] = [
   { id: 'studio', label: '스튜디오', hint: '수업 시연용 기본 조명' },
