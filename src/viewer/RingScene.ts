@@ -212,16 +212,18 @@ export class RingScene {
 
   /** 카메라를 지정한 프리셋으로 옮깁니다. */
   applyView(preset: ViewPreset, animate = true): void {
+    this.updateFitSphere()
     const dist = this.fitDistance()
+    const c = this.fitSphere.center
     const side = this.design.engraving.position === 'outer' ? -1 : 1
     const to =
       preset === 'right'
-        ? new THREE.Vector3(dist, dist * 0.24, 0)
+        ? new THREE.Vector3(c.x + dist, c.y + dist * 0.24, c.z)
         : preset === 'engrave'
           ? // 각인은 6시(스톤 반대편)에 있으므로 위(안쪽)/아래(바깥)에서 내려다봅니다.
-            new THREE.Vector3(dist * 0.1, dist * 0.92 * side, dist * 0.34).multiplyScalar(0.66)
-          : new THREE.Vector3(0, dist * 0.16, dist)
-    this.controls.target.set(0, 0, 0)
+            new THREE.Vector3(c.x + dist * 0.12, c.y + dist * 0.9 * side, c.z + dist * 0.36)
+          : new THREE.Vector3(c.x, c.y + dist * 0.16, c.z + dist)
+    this.controls.target.copy(c)
     if (!animate) {
       this.camera.position.copy(to)
       this.controls.update()
@@ -290,15 +292,28 @@ export class RingScene {
     return size.x / Math.max(1, size.y)
   }
 
-  /** 반지가 화면에 꽉 차는 카메라 거리 */
+  /** 밴드 + 스톤·세팅 전체를 담는 구 — 프레이밍·클리핑·줌 범위가 모두 이 구를 기준으로 합니다. */
+  private fitSphere = new THREE.Sphere(new THREE.Vector3(), 11)
+
+  private updateFitSphere(): void {
+    this.ringGroup.updateWorldMatrix(true, true)
+    const box = new THREE.Box3().setFromObject(this.ringGroup)
+    if (box.isEmpty()) {
+      this.fitSphere.set(new THREE.Vector3(), Math.max(6, (this.band?.outerRadiusMm ?? 11) * 1.2))
+      return
+    }
+    box.getBoundingSphere(this.fitSphere)
+    // 살짝 여유를 둡니다.
+    this.fitSphere.radius *= 1.04
+  }
+
+  /** 디자인 전체가 화면에 꽉 차는 카메라 거리 */
   private fitDistance(): number {
-    const outer = this.band?.outerRadiusMm ?? 11
-    // 스톤·세팅까지 포함해 여유 있게 담기도록 1.25배 여백을 둡니다(기본 뷰에서 반지가 잘리지 않게).
-    const radius = Math.max(6, outer * 1.25)
+    const radius = Math.max(6, this.fitSphere.radius)
     const fov = THREE.MathUtils.degToRad(this.camera.fov)
     const aspect = this.currentAspect()
     const hFov = 2 * Math.atan(Math.tan(fov / 2) * aspect)
-    return (radius / Math.sin(Math.min(fov, hFov) / 2)) * 1.32
+    return (radius / Math.sin(Math.min(fov, hFov) / 2)) * 1.08
   }
 
   private rebuild(opts: { refit: boolean; then: ViewPreset | null }): void {
@@ -359,11 +374,11 @@ export class RingScene {
       }
     }
 
-    if (first || opts.refit) {
-      this.fitCamera()
-    } else {
+    this.updateFitSphere()
+    if (!first && !opts.refit) {
       this.updateClip()
     }
+    if (first || opts.refit) this.fitCamera()
     if (first) this.applyView('front', false)
     if (opts.then) this.applyView(opts.then, true)
     this.emitMetrics()
@@ -440,23 +455,28 @@ export class RingScene {
   }
 
   private updateClip(): void {
-    const radius = Math.max(6, (this.band?.outerRadiusMm ?? 11) * 1.12)
+    const radius = Math.max(6, this.fitSphere.radius)
     // 깊이 정밀도가 확보되도록 near 를 너무 작게 두지 않습니다(각인 패치 z-파이팅 방지).
     this.camera.near = Math.max(0.8, radius * 0.09)
     this.camera.far = radius * 90
     this.camera.aspect = this.currentAspect()
     this.camera.updateProjectionMatrix()
-    this.controls.minDistance = radius * 1.15
-    this.controls.maxDistance = radius * 9
+    this.controls.minDistance = radius * 1.05
+    this.controls.maxDistance = radius * 8
   }
 
   private fitCamera(): void {
     if (!this.band) return
+    this.updateFitSphere()
     const dist = this.fitDistance()
     this.updateClip()
-    this.camera.position.set(0, dist * 0.16, dist)
-    this.camera.lookAt(0, 0, 0)
-    this.controls.target.set(0, 0, 0)
+    this.controls.target.copy(this.fitSphere.center)
+    this.camera.position.set(
+      this.fitSphere.center.x,
+      this.fitSphere.center.y + dist * 0.16,
+      this.fitSphere.center.z + dist,
+    )
+    this.camera.lookAt(this.fitSphere.center)
     this.controls.update()
     this.needsRender = true
   }
@@ -474,14 +494,9 @@ export class RingScene {
     const t = Math.min(1, (now - anim.start) / anim.dur)
     const e = 1 - Math.pow(1 - t, 3) // ease-out
     this.camera.position.copy(anim.from).lerp(anim.to, e)
-    this.camera.lookAt(0, 0, 0)
-    this.controls.target.set(0, 0, 0)
+    this.camera.lookAt(this.fitSphere.center)
     this.needsRender = true
-    if (t >= 1) {
-      this.viewAnim = null
-      // 오빗 컨트롤 내부 상태를 지금 카메라 위치와 맞춥니다.
-      this.controls.update()
-    }
+    if (t >= 1) this.viewAnim = null
   }
 
   private resize(): void {
