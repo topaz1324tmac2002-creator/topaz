@@ -10,7 +10,7 @@ export type ProfileId = 'dome' | 'flat' | 'bevel' | 'twist'
 export type ComfortFit = 'off' | 'soft' | 'strong'
 export type StoneShape = 'round' | 'oval' | 'pear' | 'marquise' | 'emerald' | 'cabochon'
 export type SettingType = 'prong4' | 'prong6' | 'bezel' | 'halo' | 'channel'
-export type GemId = 'diamond' | 'ruby' | 'sapphire' | 'citrine' | 'topaz'
+export type GemId = 'diamond' | 'ruby' | 'sapphire' | 'citrine' | 'topaz' | 'blackDiamond'
 export type MetalId = 'gold18k' | 'gold14k' | 'rose18k' | 'white18k' | 'silver925' | 'pt950'
 export type EnvironmentId = 'studio' | 'softbox' | 'dark'
 export type EngravePosition = 'inner' | 'outer'
@@ -87,6 +87,14 @@ export interface Gem {
   envIntensity: number
   /** 투과(transmission) 세기 */
   transmission: number
+  /** 표면 코트층 세기 — 패싯 경계의 날카로운 반사광을 만듭니다(기본 1) */
+  clearcoat?: number
+  /** 코트층 거칠기(기본 0.02) */
+  clearcoatRoughness?: number
+  /** 유전체 반사 하이라이트 세기(기본 1) */
+  specularIntensity?: number
+  /** 빛을 통과시키지 않는 보석 — 투과 대신 표면 반사로만 표현합니다(블랙 다이아몬드) */
+  opaque?: boolean
 }
 
 export const DEFAULT_DESIGN: Design = {

@@ -5,7 +5,7 @@
  *  - 탐색(navigation) 요청: 네트워크 우선 → 실패하면 캐시된 index.html
  *  - 그 밖의 같은 scope 정적 자산: stale-while-revalidate (캐시 즉시 응답 + 백그라운드 갱신)
  */
-const VERSION = 'topaz-v5'
+const VERSION = 'topaz-v6'
 const CACHE = `topaz-shell-${VERSION}`
 const CACHE_PREFIX = 'topaz-shell-'
 

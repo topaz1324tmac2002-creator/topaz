@@ -351,6 +351,18 @@ input[type='range']::-moz-range-thumb {
   border: 1px solid var(--line-soft);
 }
 
+/* 보석 색처럼 항목이 많은 그룹 — 두 줄로 나눠 긴 라벨이 잘리지 않게 합니다 */
+.segmented.is-wrap {
+  flex-wrap: wrap;
+}
+
+.segmented.is-wrap .seg {
+  flex: 1 1 calc(50% - 3px);
+  min-width: 0;
+  white-space: nowrap;
+  padding: 0 8px;
+}
+
 .seg {
   flex: 1;
   min-height: 40px;

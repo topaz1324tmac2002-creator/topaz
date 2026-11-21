@@ -33,9 +33,27 @@ export const GEMS: Record<GemId, Gem> = {
   sapphire: { id: 'sapphire', name: '사파이어', short: 'SAP', color: 0x123a96, ior: 1.77, roughness: 0.05, envIntensity: 2.2, transmission: 0.72 },
   citrine: { id: 'citrine', name: '시트린', short: 'CIT', color: 0xe0900f, ior: 1.55, roughness: 0.06, envIntensity: 2.1, transmission: 0.7 },
   topaz: { id: 'topaz', name: '토파즈 (스위스 블루)', short: 'TPZ', color: 0x3fa9dd, ior: 1.62, roughness: 0.04, envIntensity: 2.3, transmission: 0.78 },
+  // 블랙 다이아몬드는 다이아몬드와 같은 굴절률(2.417)이지만 빛을 통과시키지 않습니다.
+  // 몸체는 깊은 검정으로 두고, 매끈한 표면(거칠기 0.02)과 코트층이 방향광을 또렷한
+  // 하이라이트로 받아 브릴리언트 컷 패싯 경계가 빛으로 살아나게 합니다.
+  // envIntensity 는 다이아몬드(2.6) 대비 비율 — 환경 반사를 낮춰 검정이 회색으로 뜨지 않게 합니다.
+  blackDiamond: {
+    id: 'blackDiamond',
+    name: '블랙 다이아몬드',
+    short: 'BLK',
+    color: 0x0a0b0d,
+    ior: 2.417,
+    roughness: 0.02,
+    envIntensity: 0.2,
+    transmission: 0,
+    clearcoat: 1,
+    clearcoatRoughness: 0.004,
+    specularIntensity: 0.15,
+    opaque: true,
+  },
 }
 
-export const GEM_ORDER: GemId[] = ['diamond', 'ruby', 'sapphire', 'citrine', 'topaz']
+export const GEM_ORDER: GemId[] = ['diamond', 'ruby', 'sapphire', 'citrine', 'topaz', 'blackDiamond']
 
 export const PROFILES: { id: ProfileId; label: string; hint: string }[] = [
   { id: 'dome', label: '돔', hint: '바깥면이 볼록한 기본형. 가장 흔한 결혼반지 단면' },

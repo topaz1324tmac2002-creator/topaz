@@ -74,7 +74,8 @@ export function MaterialPanel(): JSX.Element {
         </div>
         <p className="field-hint">
           루비·사파이어는 코런덤(IOR 1.77), 시트린은 석영(IOR 1.55), 토파즈는 스위스 블루(IOR 1.62) 값으로
-          렌더링됩니다.
+          렌더링됩니다. 블랙 다이아몬드는 다이아몬드와 같은 IOR 2.417이지만 빛을 통과시키지 않고 표면에서
+          반사해, 깊은 검정 위에 패싯 경계가 하이라이트로 살아납니다.
         </p>
       </Section>
 

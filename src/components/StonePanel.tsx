@@ -58,6 +58,7 @@ export function StonePanel({ warnings }: { warnings: string[] }): JSX.Element {
       <Section title="보석 색" aside={<span className="badge">{GEMS[stone.gem].short}</span>}>
         <Segmented
           value={stone.gem}
+          wrap={GEM_ORDER.length > 5}
           options={GEM_ORDER.map((id) => ({ value: id, label: GEMS[id].name.replace(' (스위스 블루)', '') }))}
           onChange={(v) => patchStone({ gem: v }, 'stone:gem')}
         />

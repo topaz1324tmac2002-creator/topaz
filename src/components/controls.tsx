@@ -57,6 +57,8 @@ interface SegmentedProps<T extends string> {
   value: T
   options: { value: T; label: string }[]
   hint?: string
+  /** 항목이 많을 때(6개 이상) 두 줄로 나눠 라벨이 잘리지 않게 합니다 */
+  wrap?: boolean
   onChange: (v: T) => void
 }
 
@@ -65,6 +67,7 @@ export function Segmented<T extends string>({
   value,
   options,
   hint,
+  wrap,
   onChange,
 }: SegmentedProps<T>): JSX.Element {
   return (
@@ -74,7 +77,7 @@ export function Segmented<T extends string>({
           <label>{label}</label>
         </div>
       ) : null}
-      <div className="segmented" role="group">
+      <div className={`segmented${wrap ? ' is-wrap' : ''}`} role="group">
         {options.map((o) => (
           <button
             key={o.value}

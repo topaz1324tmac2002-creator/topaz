@@ -238,10 +238,13 @@ export class RingScene {
   setHighQuality(on: boolean): void {
     this.highQuality = on
     const gem = GEMS[this.design.stone.gem]
-    this.gemMaterial.transmission = on ? gem.transmission : 0
+    const opaque = gem.opaque === true
+    this.gemMaterial.transmission = on && !opaque ? gem.transmission : 0
     this.gemMaterial.transparent = true
-    this.gemMaterial.opacity = on ? 1 : 0.86
-    this.gemMaterial.depthWrite = on
+    // 블랙 다이아몬드는 반투명으로 두면 배경이 비쳐 깊은 검정이 죽기 때문에
+    // 품질 설정과 관계없이 불투명하게 그립니다.
+    this.gemMaterial.opacity = opaque || on ? 1 : 0.86
+    this.gemMaterial.depthWrite = opaque || on
     this.gemMaterial.needsUpdate = true
     this.needsRender = true
   }
@@ -436,22 +439,43 @@ export class RingScene {
     this.gemMaterial.color.setHex(gem.color)
     this.gemMaterial.ior = gem.ior
     this.gemMaterial.roughness = gem.roughness
-    this.gemMaterial.envMapIntensity = gem.envIntensity
+    this.gemMaterial.envMapIntensity = this.gemEnvIntensity(gem)
+    // 매끈한 표면 + 코트층 → 패싯 경계가 또렷한 반사광으로 살아납니다.
+    this.gemMaterial.clearcoat = gem.clearcoat ?? 1
+    this.gemMaterial.clearcoatRoughness = gem.clearcoatRoughness ?? 0.02
+    this.gemMaterial.specularIntensity = gem.specularIntensity ?? 1
     this.gemMaterial.attenuationColor = new THREE.Color(gem.color).lerp(new THREE.Color(0xffffff), 0.35)
     this.gemMaterial.attenuationDistance = 1.4
-    this.gemMaterial.transmission = this.highQuality ? gem.transmission : 0
+    this.gemMaterial.transmission = this.highQuality && !gem.opaque ? gem.transmission : 0
+    this.gemMaterial.opacity = (gem.opaque || this.highQuality) ? 1 : 0.86
+    this.gemMaterial.depthWrite = (gem.opaque === true || this.highQuality)
     this.gemMaterial.needsUpdate = true
     this.needsRender = true
   }
 
-  private applyEnvironment(id: EnvironmentId): void {
-    const preset = {
+  /** 조명 환경 프리셋 — 금속 반사 세기와 노출 */
+  private envPreset(id: EnvironmentId): { intensity: number; exposure: number } {
+    return {
       studio: { intensity: 1.15, exposure: 1.05 },
       softbox: { intensity: 1.55, exposure: 1.15 },
       dark: { intensity: 0.72, exposure: 0.95 },
     }[id]
+  }
+
+  /**
+   * 보석의 환경 반사 세기 = 환경 프리셋 × 보석별 비율.
+   * 다이아몬드(2.6)를 기준(×1.8)으로 두고, 검은 보석처럼 반사를 줄여야 하는 경우
+   * 카탈로그의 envIntensity 로 비율을 낮춥니다. (블랙 다이아몬드는 검은 몸체 위에
+   * 방향광 하이라이트만 또렷하게 남기는 쪽이 실제와 가깝습니다.)
+   */
+  private gemEnvIntensity(gem: Gem): number {
+    return this.envPreset(this.design.environment).intensity * 1.8 * (gem.envIntensity / GEMS.diamond.envIntensity)
+  }
+
+  private applyEnvironment(id: EnvironmentId): void {
+    const preset = this.envPreset(id)
     this.bandMaterial.envMapIntensity = preset.intensity
-    this.gemMaterial.envMapIntensity = preset.intensity * 1.8
+    this.gemMaterial.envMapIntensity = this.gemEnvIntensity(GEMS[this.design.stone.gem])
     this.renderer.toneMappingExposure = preset.exposure
     this.scene.environment = this.envMap
     this.needsRender = true

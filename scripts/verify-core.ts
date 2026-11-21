@@ -177,15 +177,30 @@ console.log('\n── 스톤 모양 6종 (브릴리언트 · 스텝 · 캐보션
   check('메레 스톤(라운드 브릴리언트) 수밀', melee.watertight, `삼각형 ${melee.triangles}`)
 }
 
-console.log('\n── 보석 색 5종 ──')
+console.log('\n── 보석 색 6종 ──')
 {
-  check('보석 프리셋 5종', GEM_ORDER.length === 5, GEM_ORDER.map((id) => GEMS[id].name).join(' · '))
+  check('보석 프리셋 6종', GEM_ORDER.length === 6, GEM_ORDER.map((id) => GEMS[id].name).join(' · '))
   const iors = GEM_ORDER.map((id) => GEMS[id].ior)
   check('굴절률이 서로 구분된다', new Set(iors.map((v) => v.toFixed(2))).size >= 4, iors.join(' / '))
   check('루비는 붉은 계열', (GEMS.ruby.color >> 16) > 0x80 && (GEMS.ruby.color & 0xff) < 0x60, `#${GEMS.ruby.color.toString(16)}`)
   check('사파이어는 푸른 계열', (GEMS.sapphire.color & 0xff) > 0x80, `#${GEMS.sapphire.color.toString(16)}`)
   check('시트린은 황금색 계열', (GEMS.citrine.color >> 16) > 0xc0 && (GEMS.citrine.color & 0xff) < 0x60, `#${GEMS.citrine.color.toString(16)}`)
   check('토파즈는 하늘색 계열', (GEMS.topaz.color & 0xff) > 0xb0, `#${GEMS.topaz.color.toString(16)}`)
+
+  const blk = GEMS.blackDiamond
+  check('블랙 다이아몬드 몸체가 깊은 검정', (blk.color >> 16) <= 0x18 && (blk.color & 0xff) <= 0x18, `#${blk.color.toString(16)}`)
+  check('블랙 다이아몬드는 투과하지 않는다', blk.opaque === true && blk.transmission === 0, `opaque ${blk.opaque}, transmission ${blk.transmission}`)
+  check(
+    '블랙 다이아몬드 표면 반사가 살아 있다',
+    blk.roughness <= 0.03 && (blk.clearcoat ?? 0) >= 0.8 && (blk.clearcoatRoughness ?? 1) <= 0.01 && (blk.specularIntensity ?? 1) > 0,
+    `거칠기 ${blk.roughness}, 코트 ${blk.clearcoat}/${blk.clearcoatRoughness}, 하이라이트 ${blk.specularIntensity}`,
+  )
+  check(
+    '블랙 다이아몬드는 환경 반사를 낮춘다',
+    blk.envIntensity <= GEMS.diamond.envIntensity * 0.2,
+    `환경 반사 ${blk.envIntensity} (다이아몬드 ${GEMS.diamond.envIntensity} 대비 ${Math.round((blk.envIntensity / GEMS.diamond.envIntensity) * 100)}%)`,
+  )
+  check('블랙 다이아몬드 굴절률은 다이아몬드와 같다', Math.abs(blk.ior - GEMS.diamond.ior) < 1e-6, `IOR ${blk.ior}`)
 }
 
 console.log('\n── 스톤 & 세팅 (모양 × 세팅 조합) ──')
