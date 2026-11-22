@@ -15,11 +15,12 @@
  */
 import * as THREE from 'three'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
-import type { StoneParams, StoneShape } from './types'
+import type { StoneCut, StoneParams, StoneShape } from './types'
 import { stoneShape } from './catalog'
 import {
   offsetOutline,
   outlineArea,
+  outlineAtAngle,
   outlinePerimeter,
   sampleOutline,
   sampleTs,
@@ -41,9 +42,11 @@ export interface StoneLayout {
   /** 세팅 금속부(프롱·V프롱·베젤·시트·헤일로 갤러리·채널 벽) */
   metals: MeshPart[]
   warnings: string[]
-  /** 보석 1개(센터)의 겉보기 외접 지름 mm */
+  /** 보석 1개(센터)의 겉보기 외접 지름 mm — 세팅 금속부까지 포함한 접선 방향 폭 */
   stoneFootprintMm: number
   stepDeg: number
+  /** 세팅별 실측값(검증·보고용) — 채널이면 channel, 헤일로면 halo, 프롱이면 prongs */
+  info: SettingInfo
 }
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v))
@@ -454,6 +457,7 @@ function tipParams(shape: StoneShape): number[] {
   return []
 }
 
+
 /**
  * V 프롱 — 뾰족한 팁을 감싸는 쐐기형 다리.
  * 팁 양옆 윤곽을 따라 얇은 두 봉을 붙여 V 자를 만들고, 팁 너머까지 살짝 물려 줍니다.
@@ -512,54 +516,168 @@ function buildVProng(outline: Outline, tipT: number, sizeMm: number, prongMm: nu
   )
 }
 
-function prongGeometry(sizeMm: number, prongMm: number): THREE.BufferGeometry {
-  const r = prongMm / 2
-  const crownH = sizeMm * 0.22
-  const bottom = -sizeMm * 0.22
-  const top = crownH * 0.78
-  const height = top - bottom
-  const cyl = new THREE.CylinderGeometry(r * 0.82, r, height, 12, 1, false)
-  cyl.translate(0, (top + bottom) / 2, 0)
-  const ball = new THREE.SphereGeometry(r * 0.95, 12, 8)
-  ball.translate(0, top, 0)
-  const merged = mergeGeometries([cyl, ball], false)
-  cyl.dispose()
-  ball.dispose()
-  if (merged) return merged
-  const fallback = new THREE.CylinderGeometry(r * 0.82, r, height, 12, 1, false)
-  fallback.translate(0, (top + bottom) / 2, 0)
-  return fallback
+/* ── 프롱(발) ─────────────────────────────────────────────── */
+
+/**
+ * 크라운 반지름 비율 — 거들면(y=0)에서 테이블로 올라가며 윤곽 반지름이 줄어드는 정도.
+ * 프롱 발톱이 "거들 옆 허공"이 아니라 크라운 표면에 실제로 닿는 높이·깊이를 잡는 데 씁니다.
+ *  · 브릴리언트: 거들 1.0 → 스타(52% 높이) 0.79 → 테이블 0.56
+ *  · 스텝: 거들 1.0 → 테이블 0.76
+ *  · 캐보션: 돔(높이 42%)
+ */
+function crownFactor(cut: StoneCut, y: number, sizeMm: number): number {
+  if (y <= 0) return 1
+  if (cut === 'step') return 1 - 0.24 * Math.min(1, y / (sizeMm * 0.17))
+  if (cut === 'cabochon') {
+    const t = Math.min(1, y / (sizeMm * 0.42))
+    return Math.sqrt(Math.max(0, 1 - t * t))
+  }
+  const h = sizeMm * 0.155
+  const star = h * 0.52
+  if (y >= h) return 0.56
+  if (y <= star) return 1 - 0.21 * (y / star)
+  return 0.79 - 0.23 * ((y - star) / (h - star))
 }
 
-/** 프롱 배치 — 뾰족한 모양은 팁에 V 프롱, 나머지는 균등 배분 */
-function buildProngParts(params: StoneParams, outline: Outline): Placed[] {
+/** 스톤 높이별 크라운 높이(mm) */
+function crownHeight(cut: StoneCut, sizeMm: number): number {
+  return sizeMm * (cut === 'step' ? 0.17 : cut === 'cabochon' ? 0.42 : 0.155)
+}
+
+/** 두 점을 잇는 원뿔대(둥근 발) — (바깥방향 x, 크라운 높이 y) 평면 위의 축. */
+function frustum(p0: Vec2, p1: Vec2, r0: number, r1: number): THREE.BufferGeometry {
+  const dx = p1[0] - p0[0]
+  const dy = p1[1] - p0[1]
+  const len = Math.hypot(dx, dy) || 1e-3
+  const cyl = new THREE.CylinderGeometry(r1, r0, len, 10, 1, false)
+  cyl.applyMatrix4(new THREE.Matrix4().makeRotationZ(Math.atan2(-dx / len, dy / len)))
+  cyl.translate((p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2, 0)
+  const flat = cyl.toNonIndexed()
+  cyl.dispose()
+  flat.deleteAttribute('uv')
+  return flat
+}
+
+/**
+ * 프롱(발) — 거들 옆에서 둥근 기둥으로 곧게 올라온 뒤, 윗부분이 안쪽으로 꺾여
+ * 크라운을 무는 발톱형 프롱. 로컬 프레임: +x = 바깥(스톤 중심 반대), +y = 크라운 높이, +z = 접선.
+ * 원점은 거들 윤곽 위.
+ *  · 기둥 축은 거들 바로 밖(0.34×지름)에 서서 거들 가장자리를 0.14×지름 물고,
+ *  · 발톱 끝(반지름 0.30×지름)은 크라운이 좁아지는 만큼 안으로 들어가 표면을 0.10×지름 문 것입니다.
+ *  · 발톱 끝은 크라운 높이의 1/3 지점 — 테이블을 가리지 않고 거들 바로 위를 잡습니다.
+ */
+function prongGeometry(
+  sizeMm: number,
+  prongMm: number,
+  rGirdle: number,
+  cut: StoneCut,
+  yBase: number,
+): THREE.BufferGeometry {
+  const pw = prongMm
+  const cH = crownHeight(cut, sizeMm)
+  const yTip = Math.min(cH * 0.36, cH - 0.02)
+  const yBend = Math.max(yBase + pw * 0.05, yTip - cH * 0.16)
+  const xPost = pw * 0.34
+  const k = crownFactor(cut, yTip, sizeMm)
+  const xTip = (k - 1) * rGirdle + pw * 0.2
+  const geos = [
+    frustum([xPost, yBase], [xPost, yBend], pw * 0.48, pw * 0.44),
+    frustum([xPost, yBend], [xTip, yTip], pw * 0.42, pw * 0.3),
+  ]
+  const tipGeo = new THREE.SphereGeometry(pw * 0.3, 10, 8).toNonIndexed()
+  tipGeo.deleteAttribute('uv')
+  tipGeo.translate(xTip, yTip, 0)
+  geos.push(tipGeo)
+  const merged = mergeGeometries(geos, false)
+  for (const g of geos) g.dispose()
+  if (merged) return merged
+  return frustum([xPost, yBase], [xPost, yBend], pw * 0.48, pw * 0.44)
+}
+
+export interface ProngInfo {
+  /** 프롱이 놓인 방향(도) — 스톤 로컬 +x(접선) 기준, 90°가 폭 방향 */
+  anglesDeg: number[]
+  /** 팁 V 프롱 수 */
+  vProngs: number
+  /** 발톱 끝이 거들 윤곽보다 들어간 깊이(mm) */
+  tipInsetMm: number
+  /** 발 기둥이 거들 바로 밖으로 나간 거리(mm) */
+  baseOffsetMm: number
+  /** 발 밑동 높이(mm, 거들면 기준) */
+  baseY: number
+  /** 이웃 스톤을 향한 발의 최대 접선 반경(mm) */
+  extentMm: number
+}
+
+/** 프롱 배치 — 뾰족한 모양은 팁에 V 프롱, 나머지는 각도(극좌표)로 배치 */
+function buildProngParts(
+  params: StoneParams,
+  outline: Outline,
+  opts: { multi: boolean; yBase: number; cut: StoneCut },
+): { parts: Placed[]; info: ProngInfo } {
   const shape = params.shape
   const n = params.setting === 'prong6' ? 6 : 4
-  const tips = tipParams(shape)
-  const geo = prongGeometry(params.sizeMm, params.prongMm)
-  const out: Placed[] = []
-  const vProngs = tips.map((t) => buildVProng(outline, t, params.sizeMm, params.prongMm))
-  for (const g of vProngs) out.push({ geometry: g, x: 0, y: 0, z: 0 })
+  const pw = params.prongMm
+  const size = params.sizeMm
+  const parts: Placed[] = []
 
-  let shoulderT: number[] = []
-  if (shape === 'pear') {
-    shoulderT = n === 6 ? [0.25, 0.75, 0.42, 0.58, 0.5] : [0.3, 0.7, 0.5]
-  } else if (shape === 'marquise') {
-    shoulderT = n === 6 ? [0.17, 0.33, 0.67, 0.83] : [0.25, 0.75]
+  // 팁 V 프롱 — 페어 1개, 마퀴즈 2개
+  const tips = tipParams(shape)
+  for (const t of tips) {
+    parts.push({ geometry: buildVProng(outline, t, size, pw), x: 0, y: 0, z: 0 })
+  }
+
+  const anglesDeg: number[] = []
+  const shoulderT: number[] = []
+  if (opts.multi) {
+    // 다석 — 이웃 스톤과 마주보는 접선 축(0°/180°)을 비우고 폭 방향에 발을 세웁니다.
+    // (양옆 스톤의 발과 부딪히지 않도록 60°~120° 구간에만 배치)
+    anglesDeg.push(...(n === 6 ? [60, 90, 120, 240, 270, 300] : [60, 120, 240, 300]))
+  } else if (tips.length > 0) {
+    // 페어·마퀴즈 단석 — 팁은 V 프롱이 잡고 어깨에 나머지를 고르게
+    if (shape === 'pear') shoulderT.push(...(n === 6 ? [0.25, 0.75, 0.42, 0.58, 0.5] : [0.3, 0.7, 0.5]))
+    else shoulderT.push(...(n === 6 ? [0.17, 0.33, 0.67, 0.83] : [0.25, 0.75]))
   } else {
-    const offset = 0.5 / n
-    for (let k = 0; k < n; k++) shoulderT.push(k / n + offset)
+    // 단석 — 고른 부채꼴 배치 (4발 45°, 6발 30° 위상)
+    for (let k = 0; k < n; k++) anglesDeg.push((360 / n) * k + 360 / (2 * n))
   }
-  for (const t of shoulderT) {
-    const s = sampleOutline(outline, t)
-    out.push({
-      geometry: geo,
-      x: s.x + s.nx * params.prongMm * 0.26,
-      y: 0,
-      z: s.z + s.nz * params.prongMm * 0.26,
-    })
+
+  const targets: { x: number; z: number; nx: number; nz: number }[] = []
+  for (const a of anglesDeg) targets.push(outlineAtAngle(outline, (a * Math.PI) / 180))
+  for (const t of shoulderT) targets.push(sampleOutline(outline, t))
+
+  // 같은 반지름의 발은 지오메트리를 공유합니다(스톤 1개당 2~4종).
+  const cache = new Map<string, THREE.BufferGeometry>()
+  let tipInset = 0
+  let extent = 0
+  for (const s of targets) {
+    const r = Math.hypot(s.x, s.z) || 1
+    const key = r.toFixed(3)
+    let geo = cache.get(key)
+    if (!geo) {
+      geo = prongGeometry(size, pw, r, opts.cut, opts.yBase)
+      cache.set(key, geo)
+    }
+    const k = crownFactor(opts.cut, crownHeight(opts.cut, size) * 0.36, size)
+    tipInset = Math.max(tipInset, (1 - k) * r - pw * 0.2)
+    const rot = new THREE.Matrix4().makeRotationY(Math.atan2(-s.nz, s.nx))
+    const part: Placed = { geometry: geo, x: s.x, y: 0, z: s.z, rot }
+    parts.push(part)
+    // 발은 거들 윤곽에서 0.34×지름 바깥에 서므로, 접선 최대치는 그 위치 + 발 반지름입니다.
+    extent = Math.max(extent, Math.abs(s.x) + pw * 0.82)
   }
-  return out
+
+  return {
+    parts,
+    info: {
+      anglesDeg,
+      vProngs: tips.length,
+      tipInsetMm: tipInset,
+      baseOffsetMm: pw * 0.34,
+      baseY: opts.yBase,
+      extentMm: extent,
+    },
+  }
 }
 
 /** 스톤 아래 시트(받침) — 밴드와 스톤을 연결하는 닫힌 금속 블록.
@@ -581,23 +699,36 @@ function buildSeat(
   return buildShell(rings, { capTop: true, culetY: yTop - sizeMm * depth * 1.15 })
 }
 
-/** 헤일로 메레 지름 (mm) — 센터 스톤 폭의 20% 안팩, 일반적인 헤일로 메레 비례 */
+/** 헤일로 메레 지름 (mm) — 센터 스톤 폭의 20% 안팎, 일반적인 헤일로 메레 비례 */
 export function haloMelee(sizeMm: number): number {
   return clamp(sizeMm * 0.2, 0.8, 1.5)
 }
 
 /** 헤일로가 센터 스톤 바깥으로 더 차지하는 반지름(mm) */
 export function haloExtentMm(sizeMm: number): number {
-  return haloMelee(sizeMm) * 1.12
+  return haloMelee(sizeMm) * 0.96 + 0.04
+}
+
+export interface HaloInfo {
+  meleeMm: number
+  meleeCount: number
+  /** 메레 중심 고리가 센터 스톤 윤곽에서 나간 거리(mm) */
+  meleeOffsetMm: number
+  /** 비드 중심이 메레 중심보다 바깥으로 나간 거리(mm) */
+  beadOffsetMm: number
+  beadRadiusMm: number
+  /** 레일 윗면 높이(mm, 거들면 기준) */
+  railTopY: number
 }
 
 /**
  * 헤일로 — 센터 스톤 윤곽을 그대로 따라가는 섬세한 파베 링.
- *  · 센터 스톤 거들에 맞닿도록 메레 중심 고리(offset = d/2)를 잡고
- *  · 둘레 길이에 맞춰 메레를 서로 맞닿게(간격 = 지름) 촘촘히 박은 뒤
- *  · 메레 사이마다 작은 공유 비드 하나, 그 아래는 얇은 금속 레일만 남깁니다(넓적한 접시 아님).
+ *  · 센터 스톤 거들에 맞닿도록 메레 중심 고리(offset = d/2 + 0.04)를 잡고
+ *  · 둘레 길이에 맞춰 메레를 서로 맞닿게 배치한 뒤
+ *  · 메레 사이마다 공유 비드(프롱) 하나를 **바깥 테두리(outer rim)** 에 세워
+ *    두 스톤의 거들 바깥 모서리를 함께 물립니다 — 비드가 안쪽으로 돌지 않습니다.
  */
-function buildHalo(params: StoneParams, outline: Outline): { gems: Placed[]; metals: Placed[] } {
+function buildHalo(params: StoneParams, outline: Outline): { gems: Placed[]; metals: Placed[]; info: HaloInfo } {
   const size = params.sizeMm
   const d = haloMelee(size)
   const inset = d * 0.5 + 0.04
@@ -627,8 +758,8 @@ function buildHalo(params: StoneParams, outline: Outline): { gems: Placed[]; met
   }
 
   const meleeGeo = buildMeleeGeometry(d)
-  const meleeY = -size * 0.004
-  const tilt = (6 * Math.PI) / 180
+  const meleeY = 0
+  const tilt = (5 * Math.PI) / 180
   const gems: Placed[] = []
   for (let k = 0; k < count; k++) {
     const s = at[k]
@@ -638,22 +769,30 @@ function buildHalo(params: StoneParams, outline: Outline): { gems: Placed[]; met
     gems.push({ geometry: meleeGeo, x: s.x, y: meleeY, z: s.z, rot })
   }
 
-  // 공유 비드 프롱 — 메레 사이 경계마다 하나 (금속)
-  const beadGeo = new THREE.SphereGeometry(d * 0.15, 8, 6)
+  // 공유 비드(프롱) — 메레 사이마다 하나, 중심이 아니라 **바깥 테두리**에서 두 스톤을 함께 잡습니다.
+  // 이웃 두 메레와 같은 거리(√(0.34² + 0.5²)·d)에 두어 거들 바깥 모서리에 살짝 물리고,
+  // 아래로는 레일 윗면에 닿아 금속이 이어집니다.
+  const beadR = d * 0.16
+  const beadOut = d * 0.34
+  const beadY = -d * 0.18
+  const beadGeo = new THREE.SphereGeometry(beadR, 10, 8)
   const metals: Placed[] = []
   for (let k = 0; k < count; k++) {
     const s = sampleOutline(path, (k + 0.5) / count)
-    metals.push({ geometry: beadGeo, x: s.x, y: meleeY + d * 0.06, z: s.z })
+    metals.push({
+      geometry: beadGeo,
+      x: s.x + s.nx * beadOut,
+      y: beadY,
+      z: s.z + s.nz * beadOut,
+    })
   }
 
-  // 레일 — 메레를 받치는 얇은 금속 띠. 바깥면은 메레 바깥면보다 살짝 안으로.
-  // (바깥 윤곽은 마이터를 1.1 로 묶어, 뾰족한 팁에서 금속이 밖으로 튀어나오지 않게 합니다)
+  // 레일 — 메레 파빌리온을 받치는 얇은 금속 띠. 윗면을 거들 아래로 내려 메레를 세워 보이게 하고,
+  // 바깥 경계는 메레 바깥면과 거의 맞춥니다(넓적한 접시가 아니라 링).
   const railInner = offsetOutline(outline, -size * 0.02)
-  // 레일 바깥 경계는 메레 고리(path)를 기준으로 오프셋 — 뾰족한 팁에서도 레일이
-  // 메레의 바깥면을 덮도록(스톤이 금속 밖으로 매달리지 않도록) 같은 방식으로 확장합니다.
-  const railOuter = offsetOutline(path, d * 0.44, 1.2)
-  const railTop = meleeY - d * 0.2
-  const railBottom = meleeY - d * 0.55
+  const railOuter = offsetOutline(path, d * 0.46, 1.2)
+  const railTop = -d * 0.34
+  const railBottom = -d * 0.68
   const gallery = buildBand(
     railInner,
     railOuter,
@@ -666,44 +805,90 @@ function buildHalo(params: StoneParams, outline: Outline): { gems: Placed[]; met
     { geometry: gallery, x: 0, y: 0, z: 0 },
     { geometry: buildSeat(outline, size, railBottom + 0.02, railOuter, 0.36), x: 0, y: 0, z: 0 },
   ]
-  return { gems, metals: [...metals, ...metals2] }
+  return {
+    gems,
+    metals: [...metals, ...metals2],
+    info: {
+      meleeMm: d,
+      meleeCount: count,
+      meleeOffsetMm: inset,
+      beadOffsetMm: beadOut,
+      beadRadiusMm: beadR,
+      railTopY: railTop,
+    },
+  }
 }
 
-/** 채널 — 숄더 양쪽으로 두 개의 금속 벽 사이에 메레 스톤 줄 */
-function buildChannel(params: StoneParams): { gems: Placed[]; metals: Placed[] } {
+export interface ChannelInfo {
+  meleeMm: number
+  /** 메레 사이 중심 간격(mm) */
+  pitchMm: number
+  perSide: number
+  /** 레일 안쪽 면의 폭 방향 위치(mm) — 메레 거들(0.5d)보다 안쪽이라 거들 가장자리를 물습니다 */
+  railInnerZ: number
+  railWidthMm: number
+  /** 레일 윗면 높이(mm, 거들면 기준) */
+  railTopY: number
+  railBottomY: number
+  /** 첫 메레까지의 거리(mm) */
+  firstGapMm: number
+}
+
+/**
+ * 채널 — 숄더 양쪽으로 두 개의 금속 레일 사이 홈에 메레 스톤 줄을 물립니다.
+ *  · 메레 거들면을 레일 윗면과 같은 높이에 두어 스톤이 홈 **안쪽**에 앉고 크라운만 위로 나옵니다.
+ *  · 레일 안쪽 면은 거들 가장자리보다 0.08d 안쪽으로 물려(립) 스톤이 빠지지 않게 잡습니다.
+ *  · 레일은 밴드 표면까지 내려가 밴드와 이어집니다.
+ */
+function buildChannel(params: StoneParams, lift: number): { gems: Placed[]; metals: Placed[]; info: ChannelInfo } {
   const size = params.sizeMm
-  const melee = Math.max(0.5, Math.min(1.2, size * 0.2))
-  const spacing = melee * 2.1
+  const melee = clamp(size * 0.2, 0.5, 1.2)
+  const pitch = melee * 1.08
   const perSide = 3
-  const half = size * stoneShape(params.shape).aspect * 0.5
+  const aspect = stoneShape(params.shape).aspect
+  const half = size * aspect * 0.5
+  const first = half + melee * 0.5 + 0.22
   const gems: Placed[] = []
   const metals: Placed[] = []
   const meleeGeo = buildMeleeGeometry(melee)
 
-  const wallH = melee * 1.6
-  const wallW = Math.max(0.24, melee * 0.55)
-  const gap = half + melee * 1.3
+  const railInnerZ = melee * 0.42
+  const railW = clamp(melee * 0.45, 0.18, 0.55)
+  const railTopY = melee * 0.03
+  const railBottomY = -(lift + 0.3)
+  const lens = pitch * 1.06
 
+  const height = railTopY - railBottomY
   const unitParts: THREE.BufferGeometry[] = []
   for (const sz of [-1, 1]) {
-    const box = new THREE.BoxGeometry(spacing * 1.12, wallH, wallW)
-    box.translate(0, wallH * 0.5 - melee * 0.4, sz * (melee * 0.95 + wallW * 0.5))
+    const box = new THREE.BoxGeometry(lens, height, railW)
+    box.translate(0, (railTopY + railBottomY) / 2, sz * (railInnerZ + railW / 2))
     unitParts.push(box)
   }
-  const base = new THREE.BoxGeometry(spacing * 1.12, melee * 0.6, (melee * 0.95 + wallW) * 2)
-  base.translate(0, -melee * 0.9, 0)
-  unitParts.push(base)
   const unitGeo = mergeGeometries(unitParts, false)
   for (const g of unitParts) g.dispose()
 
   for (const dir of [-1, 1]) {
     for (let k = 0; k < perSide; k++) {
-      const x = dir * (gap + spacing * k)
-      gems.push({ geometry: meleeGeo, x, y: -melee * 0.18, z: 0 })
+      const x = dir * (first + pitch * k)
+      gems.push({ geometry: meleeGeo, x, y: 0, z: 0 })
       if (unitGeo) metals.push({ geometry: unitGeo, x, y: 0, z: 0 })
     }
   }
-  return { gems, metals }
+  return {
+    gems,
+    metals,
+    info: {
+      meleeMm: melee,
+      pitchMm: pitch,
+      perSide,
+      railInnerZ,
+      railWidthMm: railW,
+      railTopY,
+      railBottomY,
+      firstGapMm: first,
+    },
+  }
 }
 
 /**
@@ -732,6 +917,32 @@ function buildBezelParts(params: StoneParams, outline: Outline): Placed[] {
 
 /* ── 배치 ──────────────────────────────────────────────────── */
 
+/** 부품 하나가 스톤 로컬 +x(접선) 방향으로 차지하는 최대 반경(mm) */
+function partExtentX(p: Placed): number {
+  const geo = p.geometry
+  geo.computeBoundingBox()
+  const bb = geo.boundingBox
+  if (!bb) return Math.abs(p.x)
+  const v = new THREE.Vector3()
+  let m = 0
+  for (const x of [bb.min.x, bb.max.x]) {
+    for (const y of [bb.min.y, bb.max.y]) {
+      for (const z of [bb.min.z, bb.max.z]) {
+        v.set(x, y, z)
+        if (p.rot) v.applyMatrix4(p.rot)
+        m = Math.max(m, Math.abs(v.x + p.x))
+      }
+    }
+  }
+  return m
+}
+
+export interface SettingInfo {
+  channel?: ChannelInfo
+  halo?: HaloInfo
+  prongs?: ProngInfo
+}
+
 export function buildStones(
   params: StoneParams,
   ring: { outerRadiusMm: number; profileRadial?: number },
@@ -742,17 +953,85 @@ export function buildStones(
   const count = Math.max(0, Math.min(9, Math.round(params.count)))
   const aspect = spec.aspect
 
-  // 세팅별 추가 폭(접선 방향)을 반영한 외접 크기
-  const channelExtra = params.setting === 'channel' ? params.sizeMm * 0.2 * 2.1 * 3 * 2 + params.sizeMm * 0.4 : 0
-  const haloExtra = params.setting === 'halo' ? haloExtentMm(params.sizeMm) * 2 : 0
-  const footprint = params.sizeMm * aspect + channelExtra + haloExtra
-
   if (count === 0) {
-    return { gems: [], metals: [], warnings, stoneFootprintMm: footprint, stepDeg: 0 }
+    return { gems: [], metals: [], warnings, stoneFootprintMm: params.sizeMm * aspect, stepDeg: 0, info: {} }
   }
 
-  // 이웃 스톤 사이 금속 최소 0.5mm를 확보하는 각도 간격
-  let stepRad = (footprint * 1.02 + 0.55) / Rb
+  const outline = stoneOutlineMm(params.shape, params.sizeMm)
+  const gemGeo = buildGemGeometry(params.shape, params.sizeMm)
+
+  // 스톤 파빌리온(아랫면)이 밴드 안쪽(손가락 면)을 뚫지 않도록 필요한 만큼 띄웁니다.
+  const pavH =
+    params.sizeMm * (spec.cut === 'step' ? 0.43 : spec.cut === 'cabochon' ? 0.12 : 0.435)
+  const radial = ring.profileRadial ?? 1.8
+  const lift = Math.max(0.08, params.sizeMm * 0.06, pavH - radial + 0.12)
+
+  // 세팅 하나를 먼저 만들고, 실제로 차지하는 접선 반폭을 재서 스톤 사이 간격을 정합니다.
+  let settingGems: Placed[] = []
+  let settingMetals: Placed[] = []
+  const info: SettingInfo = {}
+  switch (params.setting) {
+    case 'bezel':
+      settingMetals = buildBezelParts(params, outline)
+      break
+    case 'halo': {
+      const h = buildHalo(params, outline)
+      settingGems = h.gems
+      settingMetals = h.metals
+      info.halo = h.info
+      break
+    }
+    case 'channel': {
+      const c = buildChannel(params, lift)
+      settingGems = c.gems
+      settingMetals = [
+        ...c.metals,
+        {
+          geometry: buildSeat(outline, params.sizeMm, -params.sizeMm * 0.12, scaleOutline(outline, 0.78), 0.34),
+          x: 0,
+          y: 0,
+          z: 0,
+        },
+      ]
+      info.channel = c.info
+      break
+    }
+    default: {
+      const p = buildProngParts(params, outline, {
+        multi: count > 1,
+        yBase: -Math.max(lift + 0.3, params.sizeMm * 0.22),
+        cut: spec.cut,
+      })
+      settingMetals = [
+        ...p.parts,
+        // 발 밑동이 시트 테두리에 물리도록, 시트 윗면을 거들 바로 아래·거들보다 살짝 넓게 잡습니다.
+        {
+          geometry: buildSeat(
+            outline,
+            params.sizeMm,
+            -params.sizeMm * 0.06,
+            scaleOutline(outline, 0.96),
+            0.42,
+          ),
+          x: 0,
+          y: 0,
+          z: 0,
+        },
+      ]
+      info.prongs = p.info
+      break
+    }
+  }
+
+  const halfExtent = Math.max(
+    params.sizeMm * aspect * 0.5,
+    0,
+    ...settingGems.map(partExtentX),
+    ...settingMetals.map(partExtentX),
+  )
+  // 이웃 스톤(과 그 세팅)이 접선 방향으로 최소 0.35mm 떨어지도록 각도 간격을 잡습니다.
+  const needed = Math.max(2 * halfExtent + 0.3, params.sizeMm * aspect + 0.35)
+  let stepRad = needed / Rb
   const maxArc = Math.PI * 0.82
   if ((count - 1) * stepRad > maxArc) {
     stepRad = maxArc / Math.max(1, count - 1)
@@ -763,45 +1042,8 @@ export function buildStones(
   const total = (count - 1) * stepRad
   const offset = (params.rotationDeg * Math.PI) / 180
 
-  const outline = stoneOutlineMm(params.shape, params.sizeMm)
-  const gemGeo = buildGemGeometry(params.shape, params.sizeMm)
-
-  // 센터 스톤 + 세팅
-  let settingGems: Placed[] = []
-  let settingMetals: Placed[] = []
-  switch (params.setting) {
-    case 'bezel':
-      settingMetals = buildBezelParts(params, outline)
-      break
-    case 'halo': {
-      const h = buildHalo(params, outline)
-      settingGems = h.gems
-      settingMetals = h.metals
-      break
-    }
-    case 'channel': {
-      const c = buildChannel(params)
-      settingGems = c.gems
-      settingMetals = [
-        ...c.metals,
-        { geometry: buildSeat(outline, params.sizeMm, -params.sizeMm * 0.12, scaleOutline(outline, 0.78), 0.34), x: 0, y: 0, z: 0 },
-      ]
-      break
-    }
-    default:
-      settingMetals = [
-        ...buildProngParts(params, outline),
-        { geometry: buildSeat(outline, params.sizeMm, -params.sizeMm * 0.14, scaleOutline(outline, 0.7), 0.34), x: 0, y: 0, z: 0 },
-      ]
-  }
-
   const gems: MeshPart[] = []
   const metals: MeshPart[] = []
-  // 스톤 파빌리온(아랫면)이 밴드 안쪽(손가락 면)을 뚫지 않도록 필요한 만큼 띄웁니다.
-  const pavH =
-    params.sizeMm * (spec.cut === 'step' ? 0.43 : spec.cut === 'cabochon' ? 0.12 : 0.435)
-  const radial = ring.profileRadial ?? 1.8
-  const lift = Math.max(0.08, params.sizeMm * 0.06, pavH - radial + 0.12)
 
   /** 로컬 (x,y,z) → 반지 좌표. 접선 오프셋 x 는 각도 차이로 환산합니다. */
   const place = (theta: number, radius: number, x: number, y: number, z: number, rot?: THREE.Matrix4): THREE.Matrix4 => {
@@ -828,8 +1070,9 @@ export function buildStones(
     gems,
     metals,
     warnings,
-    stoneFootprintMm: footprint,
+    stoneFootprintMm: 2 * halfExtent,
     stepDeg: (stepRad * 180) / Math.PI,
+    info,
   }
 }
 

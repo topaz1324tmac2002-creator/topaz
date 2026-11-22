@@ -338,6 +338,97 @@ console.log('\n── 새 옵션 STL (트위스트 · 새 모양 · 헤일로 ·
   }
 }
 
+console.log('\n── 세팅 지오메트리 정합성 (v7: 채널·헤일로·프롱) ──')
+{
+  const ring = buildRing(band())
+  const geoRing = { outerRadiusMm: ring.outerRadiusMm, profileRadial: ring.profileMaxRadial }
+  const shapeOf = (id: StoneShape) => STONE_SHAPES.find((s) => s.id === id)!
+
+  // 채널 — 메레가 레일 홈 "안쪽"에 앉고, 거들 가장자리가 레일 립에 물려야 합니다.
+  for (const sizeMm of [3, 5, 7]) {
+    const ch = buildStones({ ...DEFAULT_DESIGN.stone, setting: 'channel', count: 1, sizeMm }, geoRing)
+    const c = ch.info.channel!
+    check(
+      `채널 ${sizeMm}mm: 레일이 메레 거들 가장자리를 문다`,
+      c.railInnerZ < c.meleeMm * 0.5,
+      `레일 안쪽 면 z ${c.railInnerZ.toFixed(3)}mm < 거들 반경 ${(c.meleeMm * 0.5).toFixed(3)}mm`,
+    )
+    check(
+      `채널 ${sizeMm}mm: 메레 거들이 레일 윗면 아래(홈 안쪽)에 있다`,
+      c.railTopY >= 0 && c.railTopY <= c.meleeMm * 0.1,
+      `레일 윗면 y ${c.railTopY.toFixed(3)}mm (거들면 0 기준)`,
+    )
+    check(
+      `채널 ${sizeMm}mm: 메레를 촘촘한 채널 피치로 물린다`,
+      c.pitchMm <= c.meleeMm * 1.15,
+      `피치 ${c.pitchMm.toFixed(3)}mm / 메레 1개 ${c.meleeMm.toFixed(2)}mm (${(c.pitchMm / c.meleeMm).toFixed(2)}d)`,
+    )
+    check(
+      `채널 ${sizeMm}mm: 첫 메레가 센터 스톤 거들과 겹치지 않는다`,
+      c.firstGapMm >= sizeMm * shapeOf('round').aspect * 0.5 + c.meleeMm * 0.5,
+      `첫 메레 중심 ${c.firstGapMm.toFixed(2)}mm ≥ 센터 반지름+메레 반지름 ${(sizeMm * 0.5 + c.meleeMm * 0.5).toFixed(2)}mm`,
+    )
+    // 실제 메쉬: 레일 윗면(최대 반경)이 메레 거들면보다 바깥에 있어야 스톤이 홈 안쪽에 들어간 것입니다.
+    const unitGeo = ch.metals[0].geometry
+    unitGeo.computeBoundingBox()
+    const railTopWorld = Math.max(
+      ...ch.metals
+        .filter((m) => m.geometry === unitGeo)
+        .map((m) => new THREE.Vector3(0, unitGeo.boundingBox!.max.y, 0).applyMatrix4(m.matrix).length()),
+    )
+    const girdleRadius = new THREE.Vector3().setFromMatrixPosition(ch.gems[1].matrix).length()
+    check(
+      `채널 ${sizeMm}mm: 메레 거들이 레일 안쪽으로 들어갔다(월드 좌표)`,
+      railTopWorld > girdleRadius,
+      `레일 윗면 반경 ${railTopWorld.toFixed(3)}mm > 메레 거들 반경 ${girdleRadius.toFixed(3)}mm`,
+    )
+  }
+
+  // 헤일로 — 공유 비드가 메레 중심보다 바깥(외곽)에 있어야 합니다.
+  for (const shape of ['round', 'oval', 'pear'] as StoneShape[]) {
+    const hl = buildStones({ ...DEFAULT_DESIGN.stone, setting: 'halo', count: 1, shape, sizeMm: 6 }, geoRing)
+    const h = hl.info.halo!
+    check(
+      `헤일로(${shape}): 비드가 메레 중심보다 바깥 테두리에 있다`,
+      h.beadOffsetMm > 0,
+      `바깥 오프셋 +${h.beadOffsetMm.toFixed(3)}mm (메레 중심 고리 기준, 메레 ${h.meleeMm.toFixed(2)}mm)`,
+    )
+    check(
+      `헤일로(${shape}): 비드가 아래 레일에 닿아 금속이 이어진다`,
+      h.beadOffsetMm > 0 && Math.abs(-0.18 * h.meleeMm - h.beadRadiusMm - h.railTopY) <= h.meleeMm * 0.06,
+      `비드 바닥 ${(-0.18 * h.meleeMm - h.beadRadiusMm).toFixed(3)}mm ≈ 레일 윗면 ${h.railTopY.toFixed(3)}mm`,
+    )
+    check(
+      `헤일로(${shape}): 메레 거들이 레일 윗면 위로 떠 보인다`,
+      -h.railTopY >= h.meleeMm * 0.3,
+      `거들 0 대비 레일 윗면 ${h.railTopY.toFixed(3)}mm`,
+    )
+  }
+
+  // 프롱 — 발톱이 크라운 안쪽으로 들어가고, 다석에서는 이웃을 향해 발을 세우지 않습니다.
+  for (const setting of ['prong4', 'prong6'] as SettingType[]) {
+    const one = buildStones({ ...DEFAULT_DESIGN.stone, setting, count: 1, sizeMm: 6 }, geoRing)
+    const p1 = one.info.prongs!
+    check(`프롱(${setting}) 단석: 발톱이 크라운 표면 안쪽을 문다`, p1.tipInsetMm > 0, `${p1.tipInsetMm.toFixed(3)}mm 들어감 · 각도 ${p1.anglesDeg.join('/')}°`)
+    check(`프롱(${setting}) 단석: 발 개수 = ${setting === 'prong6' ? 6 : 4}`, p1.anglesDeg.length + p1.vProngs === (setting === 'prong6' ? 6 : 4))
+
+    const five = buildStones({ ...DEFAULT_DESIGN.stone, setting, count: 5, sizeMm: 3 }, geoRing)
+    const p5 = five.info.prongs!
+    const worstCos = Math.max(...p5.anglesDeg.map((a) => Math.abs(Math.cos((a * Math.PI) / 180))))
+    check(
+      `프롱(${setting}) 다석: 이웃 스톤 쪽(접선 축)에 발을 세우지 않는다`,
+      worstCos <= 0.52,
+      `각도 ${p5.anglesDeg.join('/')}° · 접선 성분 최대 ${worstCos.toFixed(2)}`,
+    )
+    const arcMm = (five.stepDeg * Math.PI) / 180 * ring.outerRadiusMm
+    check(
+      `프롱(${setting}) 다석: 이웃 발과 접선 방향으로 떨어져 있다`,
+      arcMm >= 2 * p5.extentMm + 0.2,
+      `스톤 중심 간 ${arcMm.toFixed(2)}mm ≥ 발 반경 합 ${(2 * p5.extentMm).toFixed(2)}mm + 0.2mm`,
+    )
+  }
+}
+
 console.log('\n── 금속 6종 중량 (KS12 · 폭4.0 · 두께1.8 돔) ──')
 {
   const design: Design = DEFAULT_DESIGN

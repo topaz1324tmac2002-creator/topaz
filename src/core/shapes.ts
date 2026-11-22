@@ -360,6 +360,34 @@ export function outlineRadiusAt(points: Outline, theta: number): number {
   return best
 }
 
+/**
+ * 원점에서 극각 θ(라디안, +x 기준) 방향으로 윤곽과 만나는 점 + 그 면의 바깥 법선.
+ * 프롱을 "스톤 둘레의 각도"로 배치할 때 씁니다(다석에서 이웃과 마주보는 축을 비우기 위해).
+ * 모든 스톤 윤곽은 원점에 대해 별 모양이므로 교차점이 하나입니다.
+ */
+export function outlineAtAngle(points: Outline, theta: number): { x: number; z: number; nx: number; nz: number } {
+  const dx = Math.cos(theta)
+  const dz = Math.sin(theta)
+  let best = 0
+  let hit = { x: points[0][0], z: points[0][1], nx: dx, nz: dz }
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i]
+    const b = points[(i + 1) % points.length]
+    const ex = b[0] - a[0]
+    const ez = b[1] - a[1]
+    const den = dx * ez - dz * ex
+    if (Math.abs(den) < 1e-12) continue
+    const s = (a[0] * ez - a[1] * ex) / den // 광선 매개변수
+    const u = (a[0] * dz - a[1] * dx) / den // 선분 매개변수
+    if (s > best && u >= -1e-9 && u <= 1 + 1e-9) {
+      const l = Math.hypot(ex, ez) || 1
+      best = s
+      hit = { x: dx * s, z: dz * s, nx: ez / l, nz: -ex / l }
+    }
+  }
+  return hit
+}
+
 /** 윤곽의 x/z 반지름(바운딩 박스) */
 export function outlineExtents(points: Outline): { hx: number; hz: number } {
   let hx = 0
