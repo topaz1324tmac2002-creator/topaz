@@ -155,21 +155,23 @@ function render(
       )
     } else {
       const base = tri.color
-      const fres = Math.pow(1 - Math.max(0, N.dot(V)), 2.2)
+      // 어두운 보석(블랙 다이아몬드)은 하이라이트를 줄여 검정으로 보이게 합니다.
+      const dark = base.r + base.g + base.b < 0.25 ? 0.06 : 1
+      const fres = Math.pow(1 - Math.max(0, N.dot(V)), 2.2) * dark
       let spec = 0
       for (const L of lights) {
         const Hh = new THREE.Vector3().addVectors(L.dir, V).normalize()
-        spec += Math.pow(Math.max(0, N.dot(Hh)), 420) * L.power * 9
-        spec += Math.pow(Math.max(0, N.dot(Hh)), 40) * L.power * 0.5
+        spec += Math.pow(Math.max(0, N.dot(Hh)), 420) * L.power * 9 * dark
+        spec += Math.pow(Math.max(0, N.dot(Hh)), 40) * L.power * 0.5 * dark
       }
       const upward = N.y
       const sky = THREE.MathUtils.clamp((upward + 0.25) / 1.25, 0, 1)
       const band = Math.exp(-Math.pow((upward - 0.28) * 4.2, 2))
       const env = 0.1 + sky * 0.75 + band * 0.35
       return new THREE.Color(
-        base.r * (0.1 + env * 0.9) + fres * 0.45 + spec,
-        base.g * (0.1 + env * 0.9) + fres * 0.47 + spec,
-        base.b * (0.1 + env * 0.92) + fres * 0.55 + spec,
+        base.r * (0.1 + env * 0.9 * dark) + fres * 0.45 + spec,
+        base.g * (0.1 + env * 0.9 * dark) + fres * 0.47 + spec,
+        base.b * (0.1 + env * 0.92 * dark) + fres * 0.55 + spec,
       )
     }
     }
@@ -235,8 +237,13 @@ const center = new THREE.Vector3().setFromMatrixPosition(layout.gems[0].matrix)
 const up = center.clone().normalize()
 const side = new THREE.Vector3(0, 0, 1)
 const around = new THREE.Vector3(up.y, -up.x, 0).normalize()
+const zoom = Number(process.env.ZOOM ?? 1)
 const at = (a: number, b: number, c: number): THREE.Vector3 =>
-  center.clone().add(around.clone().multiplyScalar(size * a)).add(side.clone().multiplyScalar(size * b)).add(up.clone().multiplyScalar(size * c))
+  center
+    .clone()
+    .add(around.clone().multiplyScalar(size * a * zoom))
+    .add(side.clone().multiplyScalar(size * b * zoom))
+    .add(up.clone().multiplyScalar(size * c * zoom))
 // 팁 확대 — 스톤 로컬 +x 끝(페어·마퀴즈)을 접선·측면에서 크게 봅니다.
 const outline = stoneOutlineMm(shape, size)
 const tipX = Math.max(...outline.map((p) => p[0]))
