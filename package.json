@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "verify": "esbuild scripts/verify-core.ts --bundle --platform=node --format=esm --outfile=.verify/verify.mjs --log-level=warning && node .verify/verify.mjs",
-    "preview:geo": "esbuild scripts/preview.ts --bundle --platform=node --format=esm --outfile=.verify/preview.mjs --log-level=warning && node .verify/preview.mjs"
+    "preview:geo": "esbuild scripts/preview.ts --bundle --platform=node --format=esm --outfile=.verify/preview.mjs --log-level=warning && node .verify/preview.mjs",
+    "preview:stone": "esbuild scripts/stone-preview.ts --bundle --platform=node --format=esm --outfile=.verify/stone.mjs --log-level=warning && node .verify/stone.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

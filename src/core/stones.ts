@@ -21,6 +21,7 @@ import {
   offsetOutline,
   outlineArea,
   outlineAtAngle,
+  outlineNormals,
   outlinePerimeter,
   sampleOutline,
   sampleTs,
@@ -270,25 +271,6 @@ function buildBand(
   return geo
 }
 
-/** 4개(이상) 정점의 평면 다각형을 y0~y1 로 밀어 올린 각기둥. 위면은 topScale 만큼 좁혀 테이퍼. */
-function buildPrism(poly: Vec2[], y0: number, y1: number, topScale = 1): THREE.BufferGeometry {
-  const cx = poly.reduce((s, p) => s + p[0], 0) / poly.length
-  const cz = poly.reduce((s, p) => s + p[1], 0) / poly.length
-  const verts: number[] = []
-  const bot = poly.map(([x, z]) => verts.push(x, y0, z) / 3 - 1)
-  const top = poly.map(([x, z]) => verts.push(cx + (x - cx) * topScale, y1, cz + (z - cz) * topScale) / 3 - 1)
-  const tris: Tri[] = []
-  for (let i = 1; i < poly.length - 1; i++) {
-    tris.push([bot[0], bot[i], bot[i + 1]])
-    tris.push([top[0], top[i + 1], top[i]])
-  }
-  for (let i = 0; i < poly.length; i++) {
-    const j = (i + 1) % poly.length
-    tris.push([bot[i], top[i], top[j]])
-    tris.push([bot[i], top[j], bot[j]])
-  }
-  return facetGeometry(verts, tris)
-}
 
 /* ── 보석 형상 ─────────────────────────────────────────────── */
 
@@ -450,77 +432,57 @@ interface Placed {
   rot?: THREE.Matrix4
 }
 
-/** 팁(뾰족한 끝) 방향 — 페어는 t=0 한 곳, 마퀴즈는 t=0 과 t=0.5 두 곳 */
-function tipParams(shape: StoneShape): number[] {
-  if (shape === 'pear') return [0]
-  if (shape === 'marquise') return [0, 0.5]
-  return []
+/** 뾰족한 끝(팁) 지점 — 윤곽의 ±x 극점. 각이등분 법선과 호길이 t 를 함께 돌려줍니다. */
+interface TipSite {
+  t: number
+  x: number
+  z: number
+  nx: number
+  nz: number
 }
 
-
 /**
- * V 프롱 — 뾰족한 팁을 감싸는 쐐기형 다리.
- * 팁 양옆 윤곽을 따라 얇은 두 봉을 붙여 V 자를 만들고, 팁 너머까지 살짝 물려 줍니다.
- * 높이는 거들 바로 웃깨까지만 올려(테이블을 가리지 않도록) 스톤을 잡아 줍니다.
+ * 팁 후보 — 윤곽의 x 극점 두 곳(긴 축 양 끝).
+ * 정점을 그대로 쓰므로 페어·마퀴즈의 뾰족한 꼭짓점에서 정확히 시작합니다.
+ * (sampleOutline 은 꼭짓점 대신 변의 법선을 주므로 팁에서는 각이등분 법선이 아닙니다.)
  */
-function buildVProng(outline: Outline, tipT: number, sizeMm: number, prongMm: number): THREE.BufferGeometry {
-  // 봉 길이는 절대 치수로 — 둘레가 긴 모양에서도 판때기처럼 커지지 않게.
-  const barLen = clamp(sizeMm * 0.1, 0.4, 0.9)
-  const step = barLen / outlinePerimeter(outline)
-  const thick = clamp(prongMm * 0.36, 0.18, 0.34)
-  const beyond = 0.12
-  const lift = 0.03
-  const y0 = -sizeMm * 0.2
-  const y1 = sizeMm * 0.035
-  const geos: THREE.BufferGeometry[] = []
-  for (const dir of [-1, 1]) {
-    const a = sampleOutline(outline, tipT)
-    const b = sampleOutline(outline, tipT + dir * step)
-    const mid = sampleOutline(outline, tipT + dir * step * 0.5)
-    const dx = b.x - a.x
-    const dz = b.z - a.z
-    const len = Math.hypot(dx, dz) || 1
-    const ux = dx / len
-    const uz = dz / len
-    // 봉의 바깥 방향이 스톤 바깥을 향하도록 법선 부호를 맞춥니다.
-    let nx = uz
-    let nz = -ux
-    if (nx * mid.nx + nz * mid.nz < 0) {
-      nx = -nx
-      nz = -nz
-    }
-    // 스톤 표면에서 lift 만큼 떠서 감싸도록 네 모서리를 잡습니다.
-    const p0: Vec2 = [a.x - ux * beyond + nx * lift, a.z - uz * beyond + nz * lift]
-    const p1: Vec2 = [b.x - ux * thick * 0.25 + nx * lift, b.z - uz * thick * 0.25 + nz * lift]
-    const poly: Vec2[] = [
-      [p0[0], p0[1]],
-      [p1[0], p1[1]],
-      [p1[0] + nx * thick, p1[1] + nz * thick],
-      [p0[0] + nx * thick, p0[1] + nz * thick],
-    ]
-    geos.push(buildPrism(poly, y0, y1, 0.86))
+function tipSites(outline: Outline): TipSite[] {
+  const normals = outlineNormals(outline)
+  const n = outline.length
+  const cum: number[] = [0]
+  for (let i = 0; i < n; i++) {
+    const a = outline[i]
+    const b = outline[(i + 1) % n]
+    cum.push(cum[i] + Math.hypot(b[0] - a[0], b[1] - a[1]))
   }
-  const merged = mergeGeometries(geos, false)
-  for (const g of geos) g.dispose()
-  if (merged) return merged
-  return buildPrism(
-    [
-      [0, 0],
-      [thick, 0],
-      [thick, thick],
-      [0, thick],
-    ],
-    y0,
-    y1,
-    0.86,
-  )
+  const per = cum[n] || 1
+  let hi = 0
+  let lo = 0
+  for (let i = 1; i < n; i++) {
+    if (outline[i][0] > outline[hi][0]) hi = i
+    if (outline[i][0] < outline[lo][0]) lo = i
+  }
+  const at = (i: number): TipSite => ({
+    t: cum[i] / per,
+    x: outline[i][0],
+    z: outline[i][1],
+    nx: normals[i][0],
+    nz: normals[i][1],
+  })
+  return [at(hi), at(lo)]
+}
+
+/** 모양별 팁 — 페어는 뾰족한 +x 한 곳, 마퀴즈는 양 끝 두 곳 */
+function tipSitesFor(shape: StoneShape, outline: Outline): TipSite[] {
+  if (shape === 'pear') return [tipSites(outline)[0]]
+  if (shape === 'marquise') return tipSites(outline)
+  return []
 }
 
 /* ── 프롱(발) ─────────────────────────────────────────────── */
 
 /**
  * 크라운 반지름 비율 — 거들면(y=0)에서 테이블로 올라가며 윤곽 반지름이 줄어드는 정도.
- * 프롱 발톱이 "거들 옆 허공"이 아니라 크라운 표면에 실제로 닿는 높이·깊이를 잡는 데 씁니다.
  *  · 브릴리언트: 거들 1.0 → 스타(52% 높이) 0.79 → 테이블 0.56
  *  · 스텝: 거들 1.0 → 테이블 0.76
  *  · 캐보션: 돔(높이 42%)
@@ -544,54 +506,221 @@ function crownHeight(cut: StoneCut, sizeMm: number): number {
   return sizeMm * (cut === 'step' ? 0.17 : cut === 'cabochon' ? 0.42 : 0.155)
 }
 
-/** 두 점을 잇는 원뿔대(둥근 발) — (바깥방향 x, 크라운 높이 y) 평면 위의 축. */
-function frustum(p0: Vec2, p1: Vec2, r0: number, r1: number): THREE.BufferGeometry {
-  const dx = p1[0] - p0[0]
-  const dy = p1[1] - p0[1]
-  const len = Math.hypot(dx, dy) || 1e-3
-  const cyl = new THREE.CylinderGeometry(r1, r0, len, 10, 1, false)
-  cyl.applyMatrix4(new THREE.Matrix4().makeRotationZ(Math.atan2(-dx / len, dy / len)))
-  cyl.translate((p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2, 0)
-  const flat = cyl.toNonIndexed()
-  cyl.dispose()
-  flat.deleteAttribute('uv')
-  return flat
+/**
+ * 곡선을 따라 굵기가 변하는 관 — 프롱 몸통.
+ * 스테이션은 (x=바깥, y=높이) 평면 위 중심선이고, 단면은 그 접선에 수직인 원입니다.
+ * 끝은 반구(돔)로 닫아 둥근 클로 발톱이 됩니다.
+ */
+function tubeAlong(stations: { x: number; y: number; r: number }[], segs: number): THREE.BufferGeometry {
+  const n = stations.length
+  const pos: number[] = []
+  const idx: number[] = []
+  const frame = (i: number): { cx: number; cy: number; r: number; nx: number; ny: number } => {
+    const a = stations[Math.max(0, i - 1)]
+    const b = stations[Math.min(n - 1, i + 1)]
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    const l = Math.hypot(dx, dy) || 1
+    // 단면이 놓이는 면의 두 축: z 축과, 중심선 접선에 수직인 평면 내 축
+    return { cx: stations[i].x, cy: stations[i].y, r: stations[i].r, nx: dy / l, ny: -dx / l }
+  }
+  const pushRing = (cx: number, cy: number, r: number, nx: number, ny: number): void => {
+    for (let k = 0; k < segs; k++) {
+      const th = (k / segs) * Math.PI * 2
+      const c = Math.cos(th) * r
+      const s = Math.sin(th) * r
+      pos.push(cx + nx * c, cy + ny * c, s)
+    }
+  }
+  for (let i = 0; i < n; i++) {
+    const f = frame(i)
+    pushRing(f.cx, f.cy, f.r, f.nx, f.ny)
+  }
+  for (let i = 0; i < n - 1; i++) {
+    for (let k = 0; k < segs; k++) {
+      const k2 = (k + 1) % segs
+      const a = i * segs + k
+      const b = i * segs + k2
+      const c = (i + 1) * segs + k2
+      const d = (i + 1) * segs + k
+      idx.push(a, b, d, b, c, d)
+    }
+  }
+  // 밑동 캡(시트 속에 묻히는 면)
+  const base = frame(0)
+  const b0 = pos.length / 3
+  pos.push(base.cx, base.cy, 0)
+  for (let k = 0; k < segs; k++) idx.push(b0, (k + 1) % segs, k)
+  // 발톱 끝 돔 — 중심선 방향으로 반구를 닫습니다.
+  const end = frame(n - 1)
+  const dx = end.cx - stations[n - 2].x
+  const dy = end.cy - stations[n - 2].y
+  const dl = Math.hypot(dx, dy) || 1
+  const tx = dx / dl
+  const ty = dy / dl
+  const last = (n - 1) * segs
+  const domeSteps = [0.5, 0.84, 0.975]
+  const domeRad = [0.866, 0.54, 0.22]
+  let prev = last
+  for (let d = 0; d < domeSteps.length; d++) {
+    const rr = end.r * domeRad[d]
+    const start = pos.length / 3
+    pushRing(end.cx + tx * end.r * domeSteps[d], end.cy + ty * end.r * domeSteps[d], rr, end.nx, end.ny)
+    for (let k = 0; k < segs; k++) {
+      const k2 = (k + 1) % segs
+      idx.push(prev + k, prev + k2, start + k, prev + k2, start + k2, start + k)
+    }
+    prev = start
+  }
+  const tipIdx = pos.length / 3
+  pos.push(end.cx + tx * end.r, end.cy + ty * end.r, 0)
+  for (let k = 0; k < segs; k++) idx.push(prev + k, prev + ((k + 1) % segs), tipIdx)
+
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+  geo.setIndex(idx)
+  outward(geo)
+  geo.computeVertexNormals()
+  geo.computeBoundingSphere()
+  return geo
 }
 
 /**
- * 프롱(발) — 거들 옆에서 둥근 기둥으로 곧게 올라온 뒤, 윗부분이 안쪽으로 꺾여
- * 크라운을 무는 발톱형 프롱. 로컬 프레임: +x = 바깥(스톤 중심 반대), +y = 크라운 높이, +z = 접선.
- * 원점은 거들 윤곽 위.
- *  · 기둥 축은 거들 바로 밖(0.34×지름)에 서서 거들 가장자리를 0.14×지름 물고,
- *  · 발톱 끝(반지름 0.30×지름)은 크라운이 좁아지는 만큼 안으로 들어가 표면을 0.10×지름 문 것입니다.
- *  · 발톱 끝은 크라운 높이의 1/3 지점 — 테이블을 가리지 않고 거들 바로 위를 잡습니다.
+ * V 프롱 — 뾰족한 팁을 감싸는 단일 V자 쐐기 케이프.
+ *
+ *  · 팁 양쪽 숄더를 따라가는 **사각 단면 리본 하나**를 닫힌 셸 하나로 만듭니다.
+ *    단면은 (안쪽 아래 → 바깥 아래 → 바깥 위 → 안쪽 위) 네 점이고, 스테이션 사이를 이어 붙입니다.
+ *    두 봉을 따로 세워 팁 앞에서 X자로 겹치던 예전 방식과 달리 꼭짓점에서 매끈하게 이어집니다.
+ *  · 아래는 바스켓 플레이트에 살짝 박히고, 위는 꼭짓점이 가장 높은 V자 윗면입니다.
+ *  · 윗면은 크라운이 좁아지는 만큼 조금만 안쪽으로 기울여, 팁 거들을 감싸며 물게 합니다.
+ */
+function buildVProng(
+  outline: Outline,
+  tip: TipSite,
+  sizeMm: number,
+  prongMm: number,
+  cut: StoneCut,
+  yPlate: number,
+): THREE.BufferGeometry {
+  const pw = prongMm
+  const per = outlinePerimeter(outline)
+  const armMm = clamp(sizeMm * 0.16, 0.45, 1.3)
+  const step = armMm / per
+  const thick = pw * 0.42
+  const cH = crownHeight(cut, sizeMm)
+  const yApex = Math.max(yPlate + sizeMm * 0.05, cH * 0.3)
+  const yBottom = yPlate - sizeMm * 0.025
+  const N = 15
+  const eps = 1e-4
+
+  // 꼭짓점의 마이터 — 양옆 법선이 이루는 각의 코사인 보정
+  const side = sampleOutline(outline, tip.t - eps)
+  const miter = Math.min(1.05, 1 / Math.max(0.35, tip.nx * side.nx + tip.nz * side.nz))
+
+  interface St {
+    x: number
+    z: number
+    nx: number
+    nz: number
+    off: number
+    yTop: number
+    proj: number
+  }
+  const st: St[] = []
+  for (let j = 0; j < N; j++) {
+    const u = -1 + (2 * j) / (N - 1)
+    const s = Math.abs(u)
+    let x: number
+    let z: number
+    let nx: number
+    let nz: number
+    let mi: number
+    if (j * 2 === N - 1) {
+      x = tip.x
+      z = tip.z
+      nx = tip.nx
+      nz = tip.nz
+      mi = miter
+    } else {
+      const q = sampleOutline(outline, tip.t + u * step)
+      x = q.x
+      z = q.z
+      nx = q.nx
+      nz = q.nz
+      mi = 1
+    }
+    // V 윗면 — 꼭짓점이 가장 높고 숄더 끝에서 플레이트 윗면까지 내려옵니다.
+    const yTop = yApex + (yPlate - yApex) * Math.pow(s, 1.5)
+    const proj = Math.max(0, x * nx + z * nz)
+    st.push({ x, z, nx, nz, off: thick * mi, yTop, proj })
+  }
+
+  const pos: number[] = []
+  const idx: number[] = []
+  for (const q of st) {
+    // 안쪽 면이 팁 크라운을 따라가도록 높이에 따라 조금씩 안쪽으로
+    const leanTop = (1 - crownFactor(cut, q.yTop, sizeMm)) * q.proj * 0.9
+    pos.push(q.x, yBottom, q.z)
+    pos.push(q.x + q.nx * q.off, yBottom, q.z + q.nz * q.off)
+    pos.push(q.x + q.nx * (q.off - leanTop), q.yTop, q.z + q.nz * (q.off - leanTop))
+    pos.push(q.x - q.nx * leanTop, q.yTop, q.z - q.nz * leanTop)
+  }
+  // 단면 4점을 따라가는 사각 관 — 스테이션 사이 4면
+  for (let j = 0; j < N - 1; j++) {
+    const a = j * 4
+    const b = (j + 1) * 4
+    for (let k = 0; k < 4; k++) {
+      const k2 = (k + 1) % 4
+      idx.push(a + k, a + k2, b + k, a + k2, b + k2, b + k)
+    }
+  }
+  // 양 끝 단면 캡
+  const last = (N - 1) * 4
+  idx.push(0, 1, 2, 0, 2, 3)
+  idx.push(last, last + 1, last + 2, last, last + 2, last + 3)
+
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+  geo.setIndex(idx)
+  outward(geo)
+  geo.computeVertexNormals()
+  geo.computeBoundingSphere()
+  return geo
+}
+
+/**
+ * 프롱(발) — 시트/갤러리에서 매끈한 둥근 기둥이 올라와, 윗부분이 부드럽게 안쪽으로
+ * 기울며 둥근 돔(반구) 끝으로 거들 가장자리를 눌러 잡는 **라운드 볼 프롱**.
+ * 로컬 프레임: +x = 바깥(스톤 중심 반대), +y = 크라운 높이, +z = 접선. 원점은 거들 윤곽 위.
+ *
+ *  · 기둥은 굽은 곳 없이 매끈하게 이어지고(중간이 살짝 불룩), 끝은 반구 캡슐로 닫힙니다.
+ *  · 볼 중심을 거들 가장자리에서 0.26×프롱지름만큼 바깥에 두어, 볼 안쪽 면이 거들을
+ *    0.12×프롱지름 파고들며 물게 합니다 — 볼이 스톤 모서리에 딱 붙어 잡습니다.
+ *  · 볼 꼭대기는 크라운 높이의 0.45 이하 — 테이블을 가리지 않습니다.
  */
 function prongGeometry(
   sizeMm: number,
   prongMm: number,
-  rGirdle: number,
   cut: StoneCut,
   yBase: number,
 ): THREE.BufferGeometry {
   const pw = prongMm
   const cH = crownHeight(cut, sizeMm)
-  const yTip = Math.min(cH * 0.36, cH - 0.02)
-  const yBend = Math.max(yBase + pw * 0.05, yTip - cH * 0.16)
+  const rBall = pw * 0.43
+  const yBall = cH * 0.05
+  const xBall = rBall * 0.66
   const xPost = pw * 0.34
-  const k = crownFactor(cut, yTip, sizeMm)
-  const xTip = (k - 1) * rGirdle + pw * 0.2
-  const geos = [
-    frustum([xPost, yBase], [xPost, yBend], pw * 0.48, pw * 0.44),
-    frustum([xPost, yBend], [xTip, yTip], pw * 0.42, pw * 0.3),
+  const xB = xPost - pw * 0.5
+  const yPost = -cH * 0.3
+  const stations = [
+    { x: xB, y: yBase, r: pw * 0.44 },
+    { x: xB + (xPost - xB) * 0.5, y: yBase + (yPost - yBase) * 0.32, r: pw * 0.43 },
+    { x: xPost, y: yPost, r: pw * 0.4 },
+    { x: xPost * 1.04, y: -cH * 0.12, r: pw * 0.33 },
+    { x: xBall * 1.03, y: yBall - rBall * 0.78, r: rBall * 0.9 },
+    { x: xBall, y: yBall, r: rBall },
   ]
-  const tipGeo = new THREE.SphereGeometry(pw * 0.3, 10, 8).toNonIndexed()
-  tipGeo.deleteAttribute('uv')
-  tipGeo.translate(xTip, yTip, 0)
-  geos.push(tipGeo)
-  const merged = mergeGeometries(geos, false)
-  for (const g of geos) g.dispose()
-  if (merged) return merged
-  return frustum([xPost, yBase], [xPost, yBend], pw * 0.48, pw * 0.44)
+  return tubeAlong(stations, 18)
 }
 
 export interface ProngInfo {
@@ -613,7 +742,7 @@ export interface ProngInfo {
 function buildProngParts(
   params: StoneParams,
   outline: Outline,
-  opts: { multi: boolean; yBase: number; cut: StoneCut },
+  opts: { multi: boolean; yBase: number; cut: StoneCut; yPlate: number },
 ): { parts: Placed[]; info: ProngInfo } {
   const shape = params.shape
   const n = params.setting === 'prong6' ? 6 : 4
@@ -622,9 +751,9 @@ function buildProngParts(
   const parts: Placed[] = []
 
   // 팁 V 프롱 — 페어 1개, 마퀴즈 2개
-  const tips = tipParams(shape)
-  for (const t of tips) {
-    parts.push({ geometry: buildVProng(outline, t, size, pw), x: 0, y: 0, z: 0 })
+  const tips = tipSitesFor(shape, outline)
+  for (const tip of tips) {
+    parts.push({ geometry: buildVProng(outline, tip, size, pw, opts.cut, opts.yPlate), x: 0, y: 0, z: 0 })
   }
 
   const anglesDeg: number[] = []
@@ -634,9 +763,10 @@ function buildProngParts(
     // (양옆 스톤의 발과 부딪히지 않도록 60°~120° 구간에만 배치)
     anglesDeg.push(...(n === 6 ? [60, 90, 120, 240, 270, 300] : [60, 120, 240, 300]))
   } else if (tips.length > 0) {
-    // 페어·마퀴즈 단석 — 팁은 V 프롱이 잡고 어깨에 나머지를 고르게
-    if (shape === 'pear') shoulderT.push(...(n === 6 ? [0.25, 0.75, 0.42, 0.58, 0.5] : [0.3, 0.7, 0.5]))
-    else shoulderT.push(...(n === 6 ? [0.17, 0.33, 0.67, 0.83] : [0.25, 0.75]))
+    // 페어·마퀴즈 단석 — 팁은 V 프롱이 잡고, 나머지는 숄더에 같은 간격으로.
+    // 페어의 가장 넓은 곳은 긴 축에서 28% 지점, 마퀴즈는 25% 지점입니다(호 길이 기준).
+    if (shape === 'pear') shoulderT.push(...(n === 6 ? [0.2, 0.8, 0.35, 0.65, 0.5] : [0.28, 0.72, 0.5]))
+    else shoulderT.push(...(n === 6 ? [0.16, 0.34, 0.66, 0.84] : [0.25, 0.75]))
   } else {
     // 단석 — 고른 부채꼴 배치 (4발 45°, 6발 30° 위상)
     for (let k = 0; k < n; k++) anglesDeg.push((360 / n) * k + 360 / (2 * n))
@@ -646,25 +776,16 @@ function buildProngParts(
   for (const a of anglesDeg) targets.push(outlineAtAngle(outline, (a * Math.PI) / 180))
   for (const t of shoulderT) targets.push(sampleOutline(outline, t))
 
-  // 같은 반지름의 발은 지오메트리를 공유합니다(스톤 1개당 2~4종).
-  const cache = new Map<string, THREE.BufferGeometry>()
-  let tipInset = 0
+  // 모든 발은 같은 형상입니다(방향만 회전) — 지오메트리 하나를 공유합니다.
+  const geo = prongGeometry(size, pw, opts.cut, opts.yBase)
   let extent = 0
+  const tipInset = pw * 0.42 * 0.32
   for (const s of targets) {
-    const r = Math.hypot(s.x, s.z) || 1
-    const key = r.toFixed(3)
-    let geo = cache.get(key)
-    if (!geo) {
-      geo = prongGeometry(size, pw, r, opts.cut, opts.yBase)
-      cache.set(key, geo)
-    }
-    const k = crownFactor(opts.cut, crownHeight(opts.cut, size) * 0.36, size)
-    tipInset = Math.max(tipInset, (1 - k) * r - pw * 0.2)
     const rot = new THREE.Matrix4().makeRotationY(Math.atan2(-s.nz, s.nx))
     const part: Placed = { geometry: geo, x: s.x, y: 0, z: s.z, rot }
     parts.push(part)
-    // 발은 거들 윤곽에서 0.34×지름 바깥에 서므로, 접선 최대치는 그 위치 + 발 반지름입니다.
-    extent = Math.max(extent, Math.abs(s.x) + pw * 0.82)
+    // 발은 거들 윤곽 바로 밖(0.45×프롱 지름)에 서므로, 접선 최대치는 그 위치 + 발 반지름입니다.
+    extent = Math.max(extent, Math.abs(s.x) + pw * 0.95)
   }
 
   return {
@@ -673,7 +794,7 @@ function buildProngParts(
       anglesDeg,
       vProngs: tips.length,
       tipInsetMm: tipInset,
-      baseOffsetMm: pw * 0.34,
+      baseOffsetMm: pw * 0.45,
       baseY: opts.yBase,
       extentMm: extent,
     },
@@ -697,6 +818,22 @@ function buildSeat(
     { pts: top, y: yTop },
   ]
   return buildShell(rings, { capTop: true, culetY: yTop - sizeMm * depth * 1.15 })
+}
+
+/**
+ * 프롱 바스켓 — 스톤 윤곽을 살짝 넓혀 따라가는 플레이트(윗면)와, 파빌리온을 감싸며
+ * 아래로 좁아지는 짧은 벽. 프롱은 이 플레이트 테두리에서 자라 올라옵니다.
+ * 플레이트 테두리를 프롱 바깥면보다 안쪽에 두어, 옆에서 봐도 프롱이 실루엣의 가장 바깥입니다.
+ */
+function buildBasket(outline: Outline, sizeMm: number, prongMm: number, yTop: number): THREE.BufferGeometry {
+  const rings: Ring[] = [
+    { pts: scaleOutline(outline, 0.42), y: yTop - sizeMm * 0.4 },
+    { pts: offsetOutline(outline, prongMm * 0.06, 1.6), y: yTop - sizeMm * 0.24 },
+    { pts: offsetOutline(outline, prongMm * 0.26, 2), y: yTop - sizeMm * 0.1 },
+    { pts: offsetOutline(outline, prongMm * 0.18, 2.2), y: yTop - sizeMm * 0.035 },
+    { pts: offsetOutline(outline, prongMm * 0.2, 2.2), y: yTop },
+  ]
+  return buildShell(rings, { capTop: true, culetY: yTop - sizeMm * 0.46 })
 }
 
 /** 헤일로 메레 지름 (mm) — 센터 스톤 폭의 20% 안팎, 일반적인 헤일로 메레 비례 */
@@ -997,22 +1134,19 @@ export function buildStones(
       break
     }
     default: {
+      // 바스켓 윗면(플레이트) — 스톤 윤곽을 프롱 지름만큼 넓혀 따라가, 발이 그 위에 서고
+      // 페어·마퀴즈 팁에서는 플레이트도 함께 뾰족해집니다(V 프롱의 바깥면과 같은 선).
+      const yPlate = -params.sizeMm * 0.055
       const p = buildProngParts(params, outline, {
         multi: count > 1,
-        yBase: -Math.max(lift + 0.3, params.sizeMm * 0.22),
+        yBase: -params.sizeMm * 0.055 - params.sizeMm * 0.1,
         cut: spec.cut,
+        yPlate,
       })
       settingMetals = [
         ...p.parts,
-        // 발 밑동이 시트 테두리에 물리도록, 시트 윗면을 거들 바로 아래·거들보다 살짝 넓게 잡습니다.
         {
-          geometry: buildSeat(
-            outline,
-            params.sizeMm,
-            -params.sizeMm * 0.06,
-            scaleOutline(outline, 0.96),
-            0.42,
-          ),
+          geometry: buildBasket(outline, params.sizeMm, params.prongMm, yPlate),
           x: 0,
           y: 0,
           z: 0,
@@ -1063,7 +1197,7 @@ export function buildStones(
     const radius = Rb + lift
     gems.push({ geometry: gemGeo, matrix: place(theta, radius, 0, 0, 0) })
     for (const g of settingGems) gems.push({ geometry: g.geometry, matrix: place(theta, radius, g.x, g.y, g.z, g.rot) })
-    for (const m of settingMetals) metals.push({ geometry: m.geometry, matrix: place(theta, radius, m.x, m.y, m.z) })
+    for (const m of settingMetals) metals.push({ geometry: m.geometry, matrix: place(theta, radius, m.x, m.y, m.z, m.rot) })
   }
 
   return {

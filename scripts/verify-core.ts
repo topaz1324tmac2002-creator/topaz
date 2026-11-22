@@ -8,7 +8,7 @@ import * as THREE from 'three'
 import { buildProfile, buildRing } from '../src/core/ring'
 import { buildStones, buildGemGeometry, buildMeleeGeometry, estimateCarat } from '../src/core/stones'
 import { surfaceRadius, ENGRAVE_STANDOFF_MM } from '../src/core/engraving'
-import { stoneOutlineMm, outlinePerimeter, sampleOutline } from '../src/core/shapes'
+import { stoneOutlineMm, outlineAtAngle, outlinePerimeter, sampleOutline } from '../src/core/shapes'
 import { analyzeGeometry, measure, weightGrams } from '../src/core/measure'
 import { buildBinarySTL, countTriangles, stlFileName } from '../src/core/stl'
 import { GEMS, GEM_ORDER, METALS, SETTINGS, STONE_SHAPES, innerCircumference, innerDiameterToUs, ksToInnerDiameter } from '../src/core/catalog'
@@ -426,6 +426,84 @@ console.log('\n── 세팅 지오메트리 정합성 (v7: 채널·헤일로·�
       arcMm >= 2 * p5.extentMm + 0.2,
       `스톤 중심 간 ${arcMm.toFixed(2)}mm ≥ 발 반경 합 ${(2 * p5.extentMm).toFixed(2)}mm + 0.2mm`,
     )
+  }
+
+  // v8 — 모든 발이 스톤 중심을 향하는지(회전 적용), 볼 끝이 거들 밖에서 물고 있는지,
+  // 페어·마퀴즈 팁 V 프롱이 팁을 덮는지, 바스켓이 프롱보다 안쪽인지.
+  for (const setting of ['prong4', 'prong6'] as SettingType[]) {
+    const nProngTotal = setting === 'prong6' ? 6 : 4
+    let worstDot = 1
+    let worstShape = ''
+    let ballOk = true
+    let rimOk = true
+    for (const shape of ['round', 'oval', 'pear', 'marquise', 'emerald', 'cabochon'] as StoneShape[]) {
+      const lay = buildStones({ ...DEFAULT_DESIGN.stone, shape, setting, count: 1, sizeMm: 6 }, geoRing)
+      const info = lay.info.prongs!
+      const nShoulder = nProngTotal - info.vProngs
+      // V 프롱 다음에 오는 숄더 프롱들 — 스톤 로컬에서 +x 가 스톤 중심 반대(바깥)를 향해야 합니다.
+      const gemInv = new THREE.Matrix4().copy(lay.gems[0].matrix).invert()
+      const rot3 = new THREE.Matrix3().setFromMatrix4(gemInv)
+      const ol = stoneOutlineMm(shape, 6)
+      for (let i = info.vProngs; i < info.vProngs + nShoulder; i++) {
+        const m = lay.metals[i].matrix
+        const axis = new THREE.Vector3().setFromMatrixColumn(m, 0).applyMatrix3(rot3).normalize()
+        const pos = new THREE.Vector3().setFromMatrixPosition(m).applyMatrix4(gemInv)
+        // 발이 놓인 윤곽점의 법선과 회전축이 일치해야 합니다(모든 발이 스톤 중심 반대를 향함).
+        const hit = outlineAtAngle(ol, Math.atan2(pos.z, pos.x))
+        const dot = axis.x * hit.nx + axis.z * hit.nz
+        if (dot < worstDot) {
+          worstDot = dot
+          worstShape = `${shape}/${setting}`
+        }
+      }
+      // 볼 발톱의 바깥 끝이 거들 윤곽보다 나가 있어야 스톤을 물고 있습니다.
+      const girdleX = Math.max(...stoneOutlineMm(shape, 6).map((p) => Math.abs(p[0])))
+      for (let i = info.vProngs; i < info.vProngs + nShoulder; i++) {
+        const m = lay.metals[i].matrix
+        const g = lay.metals[i].geometry
+        g.computeBoundingBox()
+        const bb = g.boundingBox!
+        // 로컬 x 최대(가장 바깥) 정점의 반지름
+        const v = new THREE.Vector3(bb.max.x, 0, 0).applyMatrix4(m)
+        const r = Math.hypot(v.x, v.y)
+        const stoneR = new THREE.Vector3().setFromMatrixPosition(lay.gems[0].matrix).length()
+        if (r < stoneR - 0.02) ballOk = false
+      }
+      // V 프롱이 있으면 팁 꼭짓점을 덮어야 합니다.
+      if (info.vProngs > 0) {
+        const g = lay.metals[0].geometry
+        g.computeBoundingBox()
+        const bb = g.boundingBox!
+        const need = girdleX - 0.15
+        const covered = (bb.max.x >= need || bb.min.x <= -need) && bb.max.y > 0.1
+        if (!covered) ballOk = false
+      }
+      // 바스켓 테두리가 프롱 바깥면보다 안쪽이어야 프롱이 실루엣의 가장 바깥입니다.
+      const basket = lay.metals[lay.metals.length - 1].geometry
+      basket.computeBoundingBox()
+      const bb = basket.boundingBox!
+      if (bb.max.y > 0.02) rimOk = false
+    }
+    check(
+      `프롱(${setting}): 모든 발이 스톤 중심을 향한다(회전 적용)`,
+      worstDot > 0.9,
+      `가장 나쁜 정렬 cos ${worstDot.toFixed(2)} (${worstShape})`,
+    )
+    check(`프롱(${setting}): 볼 발톱이 거들 밖에서 스톤을 문다`, ballOk)
+    check(`프롱(${setting}): 바스켓이 프롱보다 안쪽·아래에 있다`, rimOk)
+  }
+
+  // 페어·마퀴즈 — V 프롱 수와 팁 방향
+  {
+    const pear = buildStones({ ...DEFAULT_DESIGN.stone, shape: 'pear', setting: 'prong4', count: 1, sizeMm: 6 }, geoRing)
+    check('페어: 뾰족한 팁에 V 프롱 1개', pear.info.prongs!.vProngs === 1)
+    const mq = buildStones({ ...DEFAULT_DESIGN.stone, shape: 'marquise', setting: 'prong6', count: 1, sizeMm: 6 }, geoRing)
+    check(
+      '마퀴즈: 양쪽 팁에 V 프롱 2개 + 숄더 4발',
+      mq.info.prongs!.vProngs === 2 && mq.metals.length - 1 - 2 === 4,
+      `V ${mq.info.prongs!.vProngs}개 · 금속부 ${mq.metals.length}개(바스켓 포함)`,
+    )
+    check('V 프롱 금속부 수밀', mq.metals.slice(0, 2).every((m) => analyzeGeometry(m.geometry).watertight))
   }
 }
 
